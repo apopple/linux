@@ -5,7 +5,7 @@
 config NET_VENDOR_IBM
 	bool "IBM devices"
 	default y
-	depends on PPC_PSERIES || PPC_DCR || (IBMEBUS && SPARSEMEM)
+	depends on PPC_PSERIES || PPC_DCR || (IBMEBUS && SPARSEMEM) || PPC_POWERNV
 	---help---
 	  If you have a network (Ethernet) card belonging to this class, say Y.
 
@@ -46,5 +46,12 @@ config IBMVNIC
 
 	  To compile this driver as a module, choose M here. The module will
 	  be called ibmvnic.
+
+config SYSTEMSIM_NET
+	tristate "IBM Full System Simulator Bogus Network Support"
+	default y
+	help
+	  Provides quick access to a raw ethernet device in the simulator
+	  without simulating any specific network device hardware.
 
 endif # NET_VENDOR_IBM
