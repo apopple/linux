@@ -632,6 +632,8 @@ static int emac_configure(struct emac_instance *dev)
 	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII))
 		rgmii_set_speed(dev->rgmii_dev, dev->rgmii_port,
 				dev->phy.speed);
+	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII_WOL))
+		rgmii_wol_set_speed(dev->rgmii_wol_dev, dev->phy.speed);
 	if (emac_has_feature(dev, EMAC_FTR_HAS_ZMII))
 		zmii_set_speed(dev->zmii_dev, dev->zmii_port, dev->phy.speed);
 
@@ -799,6 +801,8 @@ static int __emac_mdio_read(struct emac_instance *dev, u8 id, u8 reg)
 		zmii_get_mdio(dev->zmii_dev, dev->zmii_port);
 	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII))
 		rgmii_get_mdio(dev->rgmii_dev, dev->rgmii_port);
+	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII_WOL))
+		rgmii_wol_get_mdio(dev->rgmii_wol_dev);
 
 	/* Wait for management interface to become idle */
 	n = 20;
@@ -846,6 +850,8 @@ static int __emac_mdio_read(struct emac_instance *dev, u8 id, u8 reg)
 	DBG2(dev, "mdio_read -> %04x" NL, r);
 	err = 0;
  bail:
+	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII_WOL))
+		rgmii_wol_put_mdio(dev->rgmii_wol_dev);
 	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII))
 		rgmii_put_mdio(dev->rgmii_dev, dev->rgmii_port);
 	if (emac_has_feature(dev, EMAC_FTR_HAS_ZMII))
@@ -871,6 +877,8 @@ static void __emac_mdio_write(struct emac_instance *dev, u8 id, u8 reg,
 		zmii_get_mdio(dev->zmii_dev, dev->zmii_port);
 	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII))
 		rgmii_get_mdio(dev->rgmii_dev, dev->rgmii_port);
+	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII_WOL))
+		rgmii_wol_get_mdio(dev->rgmii_wol_dev);
 
 	/* Wait for management interface to be idle */
 	n = 20;
@@ -909,6 +917,8 @@ static void __emac_mdio_write(struct emac_instance *dev, u8 id, u8 reg,
 	}
 	err = 0;
  bail:
+	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII_WOL))
+		rgmii_wol_put_mdio(dev->rgmii_wol_dev);
 	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII))
 		rgmii_put_mdio(dev->rgmii_dev, dev->rgmii_port);
 	if (emac_has_feature(dev, EMAC_FTR_HAS_ZMII))
@@ -2277,10 +2287,11 @@ struct emac_depentry {
 #define	EMAC_DEP_MAL_IDX	0
 #define	EMAC_DEP_ZMII_IDX	1
 #define	EMAC_DEP_RGMII_IDX	2
-#define	EMAC_DEP_TAH_IDX	3
-#define	EMAC_DEP_MDIO_IDX	4
-#define	EMAC_DEP_PREV_IDX	5
-#define	EMAC_DEP_COUNT		6
+#define EMAC_DEP_RGMII_WOL_IDX  3
+#define	EMAC_DEP_TAH_IDX	4
+#define	EMAC_DEP_MDIO_IDX	5
+#define	EMAC_DEP_PREV_IDX	6
+#define	EMAC_DEP_COUNT		7
 
 static int emac_check_deps(struct emac_instance *dev,
 			   struct emac_depentry *deps)
@@ -2358,6 +2369,7 @@ static int emac_wait_deps(struct emac_instance *dev)
 	deps[EMAC_DEP_MAL_IDX].phandle = dev->mal_ph;
 	deps[EMAC_DEP_ZMII_IDX].phandle = dev->zmii_ph;
 	deps[EMAC_DEP_RGMII_IDX].phandle = dev->rgmii_ph;
+	deps[EMAC_DEP_RGMII_WOL_IDX].phandle = dev->rgmii_wol_ph;
 	if (dev->tah_ph)
 		deps[EMAC_DEP_TAH_IDX].phandle = dev->tah_ph;
 	if (dev->mdio_ph)
@@ -2380,6 +2392,7 @@ static int emac_wait_deps(struct emac_instance *dev)
 		dev->mal_dev = deps[EMAC_DEP_MAL_IDX].ofdev;
 		dev->zmii_dev = deps[EMAC_DEP_ZMII_IDX].ofdev;
 		dev->rgmii_dev = deps[EMAC_DEP_RGMII_IDX].ofdev;
+		dev->rgmii_wol_dev = deps[EMAC_DEP_RGMII_WOL_IDX].ofdev;
 		dev->tah_dev = deps[EMAC_DEP_TAH_IDX].ofdev;
 		dev->mdio_dev = deps[EMAC_DEP_MDIO_IDX].ofdev;
 	}
@@ -2585,6 +2598,8 @@ static int emac_init_config(struct emac_instance *dev)
 		dev->rgmii_ph = 0;
 	if (emac_read_uint_prop(np, "rgmii-channel", &dev->rgmii_port, 0))
 		dev->rgmii_port = 0xffffffff;
+	if (emac_read_uint_prop(np, "rgmii-wol-device", &dev->rgmii_wol_ph, 0))
+		dev->rgmii_wol_ph = 0;
 	if (emac_read_uint_prop(np, "fifo-entry-size", &dev->fifo_entry_size, 0))
 		dev->fifo_entry_size = 16;
 	if (emac_read_uint_prop(np, "mal-burst-size", &dev->mal_burst_size, 0))
@@ -2666,6 +2681,16 @@ static int emac_init_config(struct emac_instance *dev)
 		dev->features |= EMAC_FTR_HAS_RGMII;
 #else
 		printk(KERN_ERR "%s: RGMII support not enabled !\n",
+		       np->full_name);
+		return -ENXIO;
+#endif
+	}
+
+	if (dev->rgmii_wol_ph != 0) {
+#ifdef CONFIG_IBM_EMAC_RGMII_WOL
+		dev->features |= EMAC_FTR_HAS_RGMII_WOL;
+#else
+		printk(KERN_ERR "%s: RGMII WOL support not enabled !\n",
 		       np->full_name);
 		return -ENXIO;
 #endif
@@ -2844,10 +2869,15 @@ static int emac_probe(struct platform_device *ofdev)
 	    (err = rgmii_attach(dev->rgmii_dev, dev->rgmii_port, dev->phy_mode)) != 0)
 		goto err_detach_zmii;
 
+	/* Attach to RGMII_WOL, if needed */
+	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII_WOL) &&
+	    (err = rgmii_wol_attach(dev->rgmii_wol_dev, dev->phy_mode)) != 0)
+		goto err_detach_rgmii;
+
 	/* Attach to TAH, if needed */
 	if (emac_has_feature(dev, EMAC_FTR_HAS_TAH) &&
 	    (err = tah_attach(dev->tah_dev, dev->tah_port)) != 0)
-		goto err_detach_rgmii;
+		goto err_detach_rgmii_wol;
 
 	/* Set some link defaults before we can find out real parameters */
 	dev->phy.speed = SPEED_100;
@@ -2920,6 +2950,9 @@ static int emac_probe(struct platform_device *ofdev)
  err_detach_tah:
 	if (emac_has_feature(dev, EMAC_FTR_HAS_TAH))
 		tah_detach(dev->tah_dev, dev->tah_port);
+ err_detach_rgmii_wol:
+	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII_WOL))
+		rgmii_wol_detach(dev->rgmii_wol_dev);
  err_detach_rgmii:
 	if (emac_has_feature(dev, EMAC_FTR_HAS_RGMII))
 		rgmii_detach(dev->rgmii_dev, dev->rgmii_port);
@@ -3081,12 +3114,17 @@ static int __init emac_init(void)
 	rc = tah_init();
 	if (rc)
 		goto err_rgmii;
-	rc = platform_driver_register(&emac_driver);
+	rc = rgmii_wol_init();
 	if (rc)
 		goto err_tah;
+	rc = platform_driver_register(&emac_driver);
+	if (rc)
+		goto err_rgmii_wol;
 
 	return 0;
 
+ err_rgmii_wol:
+	rgmii_wol_exit();
  err_tah:
 	tah_exit();
  err_rgmii:

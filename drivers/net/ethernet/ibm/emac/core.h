@@ -42,6 +42,7 @@
 #include "phy.h"
 #include "zmii.h"
 #include "rgmii.h"
+#include "rgmii_wol.h"
 #include "mal.h"
 #include "tah.h"
 #include "debug.h"
@@ -209,6 +210,10 @@ struct emac_instance {
 	u32				rgmii_port;
 	struct platform_device		*rgmii_dev;
 
+	/* RGMII WOL infos if any */
+	u32				rgmii_wol_ph;
+	struct platform_device		*rgmii_wol_dev;
+
 	/* TAH infos if any */
 	u32				tah_ph;
 	u32				tah_port;
@@ -332,6 +337,10 @@ struct emac_instance {
  * APM821xx does not support Half Duplex mode
  */
 #define EMAC_FTR_APM821XX_NO_HALF_DUPLEX	0x00001000
+/*
+ * Set if we have a RGMII with wake on LAN.
+ */
+#define EMAC_FTR_HAS_RGMII_WOL		0x00020000
 
 /* Right now, we don't quite handle the always/possible masks on the
  * most optimal way as we don't have a way to say something like
@@ -354,6 +363,9 @@ enum {
 #endif
 #ifdef CONFIG_IBM_EMAC_RGMII
 	    EMAC_FTR_HAS_RGMII	|
+#endif
+#ifdef CONFIG_IBM_EMAC_RGMII_WOL
+	    EMAC_FTR_HAS_RGMII_WOL	|
 #endif
 #ifdef CONFIG_IBM_EMAC_NO_FLOW_CTRL
 	    EMAC_FTR_NO_FLOW_CONTROL_40x |

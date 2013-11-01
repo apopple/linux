@@ -61,6 +61,8 @@
 			  Fox Axon: present, whatever value is appropriate for each
 			  EMAC, that is the content of the current (bogus) "phy-port"
 			  property.
+    - rgmii-wol-device  : 1 cell, required iff connected to a RGMII in the WKUP
+                          power domain. phandle of the RGMII-WOL device node.
 
     Optional properties:
     - phy-address       : 1 cell, optional, MDIO address of the PHY. If absent,
@@ -146,3 +148,10 @@
 			   available.
 			   For Axon: 0x0000012a
 
+      iv) RGMII-WOL node
+
+    Required properties:
+    - compatible         : compatible list, containing 2 entries, first is
+			   "ibm,rgmii-wol-CHIP" where CHIP is the host ASIC (like
+			   EMAC) and the second is "ibm,rgmii-wol".
+    - reg                : <registers mapping>

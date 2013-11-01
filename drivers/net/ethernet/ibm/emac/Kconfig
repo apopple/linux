@@ -55,6 +55,10 @@ config IBM_EMAC_RGMII
 	bool
 	default n
 
+config IBM_EMAC_RGMII_WOL
+	bool "IBM EMAC RGMII wake-on-LAN support" if COMPILE_TEST
+	default n
+
 config IBM_EMAC_TAH
 	bool
 	default n
