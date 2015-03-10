@@ -7,6 +7,7 @@ enum pnv_phb_type {
 	PNV_PHB_P5IOC2	= 0,
 	PNV_PHB_IODA1	= 1,
 	PNV_PHB_IODA2	= 2,
+	PNV_PHB_NPU	= 3,
 };
 
 /* Precise PHB model for error management */
@@ -15,6 +16,7 @@ enum pnv_phb_model {
 	PNV_PHB_MODEL_P5IOC2,
 	PNV_PHB_MODEL_P7IOC,
 	PNV_PHB_MODEL_PHB3,
+	PNV_PHB_MODEL_NPU,
 };
 
 #define PNV_PCI_DIAG_BUF_SIZE	8192
@@ -147,9 +149,9 @@ struct pnv_phb {
 			unsigned int		reserved_pe;
 
 			/* 32-bit MMIO window */
-			unsigned int		m32_size;
-			unsigned int		m32_segsize;
-			unsigned int		m32_pci_base;
+			unsigned long		m32_size;
+			unsigned long		m32_segsize;
+			unsigned long		m32_pci_base;
 
 			/* 64-bit MMIO window */
 			unsigned int		m64_bar_idx;
@@ -229,6 +231,7 @@ extern void pnv_pci_setup_iommu_table(struct iommu_table *tbl,
 extern void pnv_pci_init_p5ioc2_hub(struct device_node *np);
 extern void pnv_pci_init_ioda_hub(struct device_node *np);
 extern void pnv_pci_init_ioda2_phb(struct device_node *np);
+extern void pnv_pci_init_npu_phb(struct device_node *np);
 extern void pnv_pci_ioda_tce_invalidate(struct iommu_table *tbl,
 					__be64 *startp, __be64 *endp, bool rm);
 extern void pnv_pci_reset_secondary_bus(struct pci_dev *dev);

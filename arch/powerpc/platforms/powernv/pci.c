@@ -815,6 +815,10 @@ void __init pnv_pci_init(void)
 		/* Look for ioda2 built-in PHB3's */
 		for_each_compatible_node(np, NULL, "ibm,ioda2-phb")
 			pnv_pci_init_ioda2_phb(np);
+
+		/* Look for NPU PHBs */
+		for_each_compatible_node(np, NULL, "ibm,ioda2-npu-phb")
+			pnv_pci_init_npu_phb(np);
 	}
 
 	/* Setup the linkage between OF nodes and PHBs */
