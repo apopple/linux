@@ -660,6 +660,8 @@ dtb-$(CONFIG_ARCH_MEDIATEK) += \
 	mt6592-evb.dtb \
 	mt8127-moose.dtb \
 	mt8135-evbp1.dtb
+dtb-$(CONFIG_MACH_OPP_PALMETTO_BMC) += aspeed-bmc-opp-palmetto.dtb
+
 endif
 
 always		:= $(dtb-y)

@@ -1,0 +1,166 @@
+#include <linux/init.h>
+#include <linux/of_irq.h>
+#include <linux/of_platform.h>
+#include <linux/io.h>
+#include <asm/mach-types.h>
+#include <asm/mach/arch.h>
+#include <asm/mach/map.h>
+
+// XXX TEMP HACKERY
+//
+// To be replaced by proper clock, pinmux and syscon drivers operating
+// from DT parameters
+
+static void __init aspeed_dt_init(void)
+{
+	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
+}
+
+#define AST_IO_VA	0xf0000000
+#define AST_IO_PA	0x1e600000
+#define AST_IO_SZ	0x00200000
+
+#define AST_IO(__pa)	((void __iomem *)(((__pa) & 0x001fffff) | AST_IO_VA))
+
+static struct map_desc aspeed_io_desc[] __initdata __maybe_unused = {
+	{
+		.virtual	=  AST_IO_VA,
+		.pfn		= __phys_to_pfn(AST_IO_PA),
+		.length		= AST_IO_SZ,
+		.type		= MT_DEVICE
+	},
+};
+
+
+#define UART_RBR	0
+#define UART_IER	1
+#define UART_FCR	2
+#define UART_LCR	3
+#define UART_MCR	4
+#define UART_LSR	5
+#define UART_MSR	6
+#define UART_SCR	7
+#define UART_THR	UART_RBR
+#define UART_IIR	UART_FCR
+#define UART_DLL	UART_RBR
+#define UART_DLM	UART_IER
+#define UART_DLAB	UART_LCR
+
+#define LSR_DR   0x01  /* Data ready */
+#define LSR_OE   0x02  /* Overrun */
+#define LSR_PE   0x04  /* Parity error */
+#define LSR_FE   0x08  /* Framing error */
+#define LSR_BI   0x10  /* Break */
+#define LSR_THRE 0x20  /* Xmit holding register empty */
+#define LSR_TEMT 0x40  /* Xmitter empty */
+#define LSR_ERR  0x80  /* Error */
+
+#define LCR_DLAB 0x80
+
+static void udbg_uart_out(unsigned int reg, u8 data)
+{
+	writeb(data, AST_IO(0x1E78F000 + reg * 4));
+}
+
+static u8 udbg_uart_in(unsigned int reg)
+{
+	return readb(AST_IO(0x1E78F000 + reg * 4)) & 0xff;
+}
+
+static void udbg_uart_setup(unsigned int speed, unsigned int clock)
+{
+	unsigned int dll, base_bauds;
+
+	if (clock == 0)
+		clock = 1843200;
+	if (speed == 0)
+		speed = 9600;
+
+	base_bauds = clock / 16;
+	dll = base_bauds / speed;
+
+	printk("DLL=%d\n", dll);
+	udbg_uart_out(UART_LCR, 0x00);
+	udbg_uart_out(UART_IER, 0xff);
+	udbg_uart_out(UART_IER, 0x00);
+	udbg_uart_out(UART_LCR, LCR_DLAB);
+	udbg_uart_out(UART_DLL, dll & 0xff);
+	udbg_uart_out(UART_DLM, dll >> 8);
+	/* 8 data, 1 stop, no parity */
+	udbg_uart_out(UART_LCR, 0x3);
+	/* RTS/DTR */
+	udbg_uart_out(UART_MCR, 0x3);
+	/* Clear & enable FIFOs */
+	udbg_uart_out(UART_FCR, 0x7);
+}
+
+static void udbg_uart_flush(void)
+{
+	/* wait for idle */
+	while ((udbg_uart_in(UART_LSR) & LSR_THRE) == 0)
+		;
+}
+
+static void udbg_uart_putc(char c)
+{
+	if (c == '\n')
+		udbg_uart_putc('\r');
+	udbg_uart_flush();
+	udbg_uart_out(UART_THR, c);
+}
+
+static void __init aspeed_init_early(void)
+{
+	// XXX UART stuff to fix to pinmux & co
+	printk("UART IO MUX...\n");
+	writel(0x02010023, AST_IO(0x1e78909c));
+	printk("UART PIN MUX...\n");
+	writel(0x1688A8A8, AST_IO(0x1e6e2000)); // UNLOCK SCU
+	printk("SCU LOCK: %08x\n", readl(AST_IO(0x1e6e2000)));
+	writel(0xcb000000, AST_IO(0x1e6e2080));
+	writel(0x00fff0c0, AST_IO(0x1e6e2084));
+	writel(0x10CC5E80, AST_IO(0x1e6e200c));
+	printk("DONE, MUX=%08x %08x\n", readl(AST_IO(0x1e6e2080)),
+	       readl(AST_IO(0x1e6e2084)));
+	printk("CLOCK_CTRL=%08x\n", readl(AST_IO(0x1e6e200c)));
+	printk("WDT0C=%08x\n", readl(AST_IO(0x1e78500c)));
+	writel(0, AST_IO(0x1e78500c));
+	printk("WDT2C=%08x\n", readl(AST_IO(0x1e78502c)));
+	writel(0, AST_IO(0x1e78502c));
+	udbg_uart_setup(115200,0);
+	udbg_uart_putc('F');
+	udbg_uart_putc('O');
+	udbg_uart_putc('O');
+	udbg_uart_putc('\n');
+}
+
+static void __init aspeed_restart(enum reboot_mode mode, const char *cmd)
+{
+	// XXX Move that to WDT driver
+#define WDT_BASE_VA AST_IO(0x1E785000)
+	writel(0x10 , WDT_BASE_VA+0x04);
+	writel(0x4755, WDT_BASE_VA+0x08);
+	writel(0x3, WDT_BASE_VA+0x0c);
+	for (;;);
+}
+
+static void __init aspeed_map_io(void)
+{
+	iotable_init(aspeed_io_desc, ARRAY_SIZE(aspeed_io_desc));
+	debug_ll_io_init();
+
+	printk("SOC Rev: %08x\n", readl(AST_IO(0x1e6e207c)));
+}
+
+static const char *const aspeed_dt_match[] __initconst = {
+	"aspeed,ast2400",
+	NULL,
+};
+
+DT_MACHINE_START(aspeed_dt, "ASpeed SoC")
+	.map_io		= aspeed_map_io,
+	.init_early	= aspeed_init_early,
+	.init_machine	= aspeed_dt_init,
+	.dt_compat	= aspeed_dt_match,
+	.restart	= aspeed_restart,
+MACHINE_END
