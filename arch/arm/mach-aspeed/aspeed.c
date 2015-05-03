@@ -134,7 +134,7 @@ static void __init aspeed_init_early(void)
 	udbg_uart_putc('\n');
 }
 
-static void __init aspeed_restart(enum reboot_mode mode, const char *cmd)
+static void aspeed_restart(enum reboot_mode mode, const char *cmd)
 {
 	// XXX Move that to WDT driver
 #define WDT_BASE_VA AST_IO(0x1E785000)
