@@ -5,6 +5,7 @@
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
+#include <mach/ast2400.h>
 
 // XXX TEMP HACKERY
 //
@@ -109,29 +110,26 @@ static void udbg_uart_putc(char c)
 	udbg_uart_out(UART_THR, c);
 }
 
-
 #define SCU_PASSWORD	0x1688A8A8
-#define SCU_BASE	0x1e6e2000
-#define WDT_BASE	0x1e785000
 
 static void __init aspeed_init_early(void)
 {
 	// XXX UART stuff to fix to pinmux & co
 	printk("UART IO MUX...\n");
-	writel(0x02010023, AST_IO(0x1e78909c));
+	writel(0x02010023, AST_IO(AST_BASE_LPC | 0x9c));
 	printk("UART PIN MUX...\n");
-	writel(SCU_PASSWORD, AST_IO(SCU_BASE)); // UNLOCK SCU
-	printk("SCU LOCK: %08x\n", readl(AST_IO(SCU_BASE)));
-	writel(0xcb000000, AST_IO(SCU_BASE | 0x80));
-	writel(0x00fff0c0, AST_IO(SCU_BASE | 0x84));
-	writel(0x10CC5E80, AST_IO(SCU_BASE | 0x0c));
-	printk("DONE, MUX=%08x %08x\n", readl(AST_IO(SCU_BASE | 0x80)),
-	       readl(AST_IO(SCU_BASE | 0x84)));
-	printk("CLOCK_CTRL=%08x\n", readl(AST_IO(0x1e6e200c)));
-	printk("WDT0C=%08x\n", readl(AST_IO(WDT_BASE | 0x0c)));
-	writel(0, AST_IO(WDT_BASE | 0x0c));
-	printk("WDT2C=%08x\n", readl(AST_IO(WDT_BASE | 0x2c)));
-	writel(0, AST_IO(WDT_BASE | 0x2c));
+	writel(SCU_PASSWORD, AST_IO(AST_BASE_SCU)); // UNLOCK SCU
+	printk("SCU LOCK: %08x\n", readl(AST_IO(AST_BASE_SCU)));
+	writel(0xcb000000, AST_IO(AST_BASE_SCU | 0x80));
+	writel(0x00fff0c0, AST_IO(AST_BASE_SCU | 0x84));
+	writel(0x10CC5E80, AST_IO(AST_BASE_SCU | 0x0c));
+	printk("DONE, MUX=%08x %08x\n", readl(AST_IO(AST_BASE_SCU | 0x80)),
+	       readl(AST_IO(AST_BASE_SCU | 0x84)));
+	printk("CLOCK_CTRL=%08x\n", readl(AST_IO(AST_BASE_SCU)));
+	printk("WDT0C=%08x\n", readl(AST_IO(AST_BASE_WDT | 0x0c)));
+	writel(0, AST_IO(AST_BASE_WDT | 0x0c));
+	printk("WDT2C=%08x\n", readl(AST_IO(AST_BASE_WDT | 0x2c)));
+	writel(0, AST_IO(AST_BASE_WDT | 0x2c));
 	udbg_uart_setup(115200,0);
 	udbg_uart_putc('F');
 	udbg_uart_putc('O');
@@ -142,9 +140,9 @@ static void __init aspeed_init_early(void)
 static void aspeed_restart(enum reboot_mode mode, const char *cmd)
 {
 	// XXX Move that to WDT driver
-	writel(0x0010, AST_IO(WDT_BASE | 0x04));
-	writel(0x0003, AST_IO(WDT_BASE | 0x0c));
-	writel(0x4755, AST_IO(WDT_BASE | 0x08));
+	writel(0x0010, AST_IO(AST_BASE_WDT | 0x04));
+	writel(0x0003, AST_IO(AST_BASE_WDT | 0x0c));
+	writel(0x4755, AST_IO(AST_BASE_WDT | 0x08));
 	for (;;);
 }
 
@@ -153,7 +151,7 @@ static void __init aspeed_map_io(void)
 	iotable_init(aspeed_io_desc, ARRAY_SIZE(aspeed_io_desc));
 	debug_ll_io_init();
 
-	printk("SOC Rev: %08x\n", readl(AST_IO(SCU_BASE | 0x7c)));
+	printk("SOC Rev: %08x\n", readl(AST_IO(AST_BASE_SCU | 0x7c)));
 }
 
 static const char *const aspeed_dt_match[] __initconst = {

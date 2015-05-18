@@ -100,8 +100,8 @@
 #define AST_ID_TIMER4		35	/* Timer 4 interrupt */
 #define AST_ID_TIMER5		36	/* Timer 5 interrupt */
 #define AST_ID_TIMER6		37	/* Timer 6 interrupt */
-#define AST_ID_TIMER7		38	/* Timer 7 interrupt */
-#define AST_ID_TIMER7		39	/* Timer 8 interrupt */
+#define AST_ID_TIMER38		38	/* Timer 7 interrupt */
+#define AST_ID_TIMER39		39	/* Timer 8 interrupt */
 #define AST_ID_SGPIOMASTER	40	/* SGPIO Master interrupt */
 #define AST_ID_SGPIOSLAVE	41	/* SGPIO Slave interrupt */
 #define AST_ID_MCTP		42	/* MCTP interrupt */
