@@ -83,6 +83,13 @@
 				status = "okay";
 			};
 
+			wdt: wdt@1e785000 {
+				compatible = "aspeed,wdt", "wdt";
+				reg = <0x1e785000 0x1c4>;
+				interrupts = <27>;
+				clocks = <&clk_apb>;
+			};
+
 			timer: timer@98400000 {
 				compatible = "aspeed,timer";
 				reg = <0x1e782000 0x90>;
