@@ -75,6 +75,14 @@
 			#size-cells = <1>;
 			ranges;
 
+			syscon: syscon@1e6e2000 {
+				compatible = "aspeed,syscon", "syscon";
+				reg = <0x1e6e2000 0x1a8>;
+				interrupts = <19>;
+				clocks = <&clk_apb>;
+				status = "okay";
+			};
+
 			timer: timer@98400000 {
 				compatible = "aspeed,timer";
 				reg = <0x1e782000 0x90>;

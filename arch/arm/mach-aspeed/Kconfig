@@ -7,6 +7,7 @@ menuconfig ARCH_ASPEED
 	select PINCTRL
 	select PINCTRL_ASPEED
 	select PHYLIB if NETDEVICES
+	select MFD_SYSCON
 	help
 	  Say Y here if you want to run your kernel on hardware with an
 	  ASpeed BMC SoC. Tested on AST2400
