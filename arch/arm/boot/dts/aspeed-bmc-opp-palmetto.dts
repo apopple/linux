@@ -90,6 +90,11 @@
 				clocks = <&clk_apb>;
 			};
 
+			rtc: rtc@1e781000 {
+				compatible = "aspeed,rtc";
+				reg = <0x1e781000 0x18>;
+			};
+
 			timer: timer@98400000 {
 				compatible = "aspeed,timer";
 				reg = <0x1e782000 0x90>;
