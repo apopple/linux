@@ -75,6 +75,13 @@
 			#size-cells = <1>;
 			ranges;
 
+			i2c: i2c@1e6e2000 {
+				compatible = "aspeed,ast2400-i2c", "i2c";
+				reg = <0x1e78a000 0x1000>;
+				interrupts = <12>;
+				clocks = <&clk_apb>;
+			};
+
 			syscon: syscon@1e6e2000 {
 				compatible = "aspeed,syscon", "syscon";
 				reg = <0x1e6e2000 0x1a8>;
