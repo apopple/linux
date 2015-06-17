@@ -87,24 +87,27 @@ static struct pinctrl_ops ast_pinctrl_ops = {
 static int ast_pinconf_get(struct pinctrl_dev *pctldev,
 			   unsigned pin, unsigned long *config)
 {
-	struct ast_pinctrl_desc *desc = pctldev->desc->pins[pin].drv_data;
-
 	dev_err(pctldev->dev, "Unimplemented function %s\n", __func__);
 
-	if (*config)
-		*config = 0;
-
-	return 0;
+	return -ENOTSUPP;
 }
 
 static int ast_pinconf_set(struct pinctrl_dev *pctldev, unsigned pin,
 			   unsigned long *configs, unsigned num_configs)
 {
-	struct ast_pinctrl_desc *desc = pctldev->desc->pins[pin].drv_data;
+	struct ast_pinctrl_desc *desc;
+
+	if (pin >= ARRAY_SIZE(pctldev->desc->pins)) {
+		drv_err(pctldev->dev, "pin number %d is too damn high\n",
+				pin);
+		return -ERANGE;
+	}
+
+	desc = pctldev->desc->pins[pin].drv_data;
 
 	dev_err(pctldev->dev, "Unimplemented function %s\n", __func__);
 
-	return 0;
+	return -ENOTSUPP;
 }
 
 static struct pinconf_ops ast_pconf_ops = {
