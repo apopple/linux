@@ -18,19 +18,10 @@ static void __init aspeed_dt_init(void)
 	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
 }
 
-static void of_aspeed_syscon_clk_init(void)
-{
-	BUG();
-}
-
 static const struct of_device_id aspeed_clk_match[] __initconst = {
 	{
 		.compatible = "fixed-clock",
 		.data = of_fixed_clk_setup,
-	},
-	{
-		.compatible = "aspeed,ast2400-syscon-clk",
-		.data = of_aspeed_syscon_clk_init,
 	},
 	{}
 };
