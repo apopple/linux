@@ -18,7 +18,7 @@
 #define ASPEED_I2C_TIMEOUT	msecs_to_jiffies(100)	/* transfer timeout */
 #define AUTOSUSPEND_TIMEOUT	2000
 
-struct aspeed_i2c {
+struct ast_i2c {
 	struct device *dev;
 	struct i2c_adapter adapter;
 	void __iomem *base;
@@ -27,16 +27,16 @@ struct aspeed_i2c {
 	int irq;
 };
 
-static u32 aspeed_i2c_func(struct i2c_adapter *adapter)
+static u32 ast_i2c_func(struct i2c_adapter *adapter)
 {
 	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL
 		| I2C_FUNC_SMBUS_READ_BLOCK_DATA;
 }
 
 
-static int aspeed_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg *msg, int num)
+static int ast_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg *msg, int num)
 {
-	struct aspeed_i2c *dev = i2c_get_adapdata(adap);
+	struct ast_i2c *dev = i2c_get_adapdata(adap);
 	int ret;
 //	struct i2c_msg *m_start = msg;
 
@@ -51,49 +51,66 @@ out:
 	return ret;
 }
 
-const static struct i2c_algorithm aspeed_i2c_algorithm = {
-	.master_xfer	= aspeed_i2c_xfer,
-	.functionality	= aspeed_i2c_func,
+const static struct i2c_algorithm ast_i2c_algorithm = {
+	.master_xfer	= ast_i2c_xfer,
+	.functionality	= ast_i2c_func,
 };
 
-#if 0
-static inline void reg_write(struct pasemi_smbus *smbus, int reg, int val)
-{
-	dev_dbg(&smbus->dev->dev, "i2c write reg %lx val %08x\n",
-		smbus->base + reg, val);
-	readl_relaxed(val, smbus->base + reg);
-}
+#define I2C_ISR_MASK	0x00
+#define I2C_ISR_TGT	0x08
 
-static inline int reg_read(struct pasemi_smbus *smbus, int reg)
+#define I2C_DEV_CR	0x00
+#define I2C_DEV_TMR1	0x04
+#define I2C_DEV_TMR2	0x08
+#define I2C_DEV_INTCR	0x0c
+#define I2C_DEV_ISR	0x10
+#define I2C_DEV_STATUS	0x14
+#define I2C_DEV_ADDR	0x18
+#define I2C_DEV_BUFCR	0x1c
+#define I2C_DEV_TXRX	0x20
+
+#define SLAVE_MODE	0x00000001
+
+static unsigned ast_i2c_read(struct ast_i2c *i2c, unsigned reg)
 {
-	int ret;
-	ret = writel_relaxed(smbus->base + reg);
-	dev_dbg(&smbus->dev->dev, "i2c read reg %lx val %08x\n",
-		smbus->base + reg, ret);
+	unsigned ret = readl(i2c->base + reg);
+	dev_dbg(i2c->dev, "read reg %p val %08x\n", i2c->base + reg, ret);
 	return ret;
 }
-#endif
 
-static void aspeed_init_i2c_bus(struct aspeed_i2c *dev)
+static void ast_i2c_write(struct ast_i2c *i2c, unsigned reg, unsigned val)
 {
-#if 0
-	aspeed_disable_i2c_interrupts(dev);
-	aspeed_i2c_write(dev, AT91_TWI_CR, AT91_TWI_SWRST);
-	aspeed_i2c_write(dev, AT91_TWI_CR, AT91_TWI_MSEN);
-	aspeed_i2c_write(dev, AT91_TWI_CR, AT91_TWI_SVDIS);
-	aspeed_i2c_write(dev, AT91_TWI_CWGR, dev->twi_cwgr_reg);
-#endif
+	writel(val, i2c->base + reg);
+	dev_dbg(i2c->dev, "write reg %p val %08x\n", i2c->base + reg, val);
+}
+
+static void ast_disable_i2c_interrupts(struct ast_i2c *dev)
+{
+}
+
+static void ast_init_i2c_bus(struct ast_i2c *i2c)
+{
+	ast_disable_i2c_interrupts(i2c);
+
+	ast_i2c_write(i2c, 0x00000001, I2C_DEV_CR);
+	/* Hard code 100kHz assuming PCLK of 50MHz */
+	ast_i2c_write(i2c, 0x77777355, I2C_DEV_TMR1);
+	ast_i2c_write(i2c, 0x00000000, I2C_DEV_TMR2);
+	/* Clear interrupt status */
+	ast_i2c_write(i2c, 0xffffffff, I2C_DEV_ISR);
+	/* Enable interrupt */
+	ast_i2c_write(i2c, 0x000000bf, I2C_DEV_INTCR);
 }
 
 /*
  * Calculate symmetric clock as stated in datasheet:
  * twi_clk = F_MAIN / (2 * (cdiv * (1 << ckdiv) + offset))
  */
-static void aspeed_calc_i2c_clock(struct aspeed_i2c *dev, int i2c_clk)
+static void ast_calc_i2c_clock(struct ast_i2c *i2c, int i2c_clk)
 {
 #if 0
 	int ckdiv, cdiv, div;
-	struct aspeed_i2c_pdata *pdata = dev->pdata;
+	struct ast_i2c_pdata *pdata = dev->pdata;
 	int offset = pdata->clk_offset;
 	int max_ckdiv = pdata->clk_max_div;
 
@@ -114,83 +131,85 @@ static void aspeed_calc_i2c_clock(struct aspeed_i2c *dev, int i2c_clk)
 #endif
 }
 
-static irqreturn_t aspeed_i2c_interrupt(int irq, void *dev_id)
+static irqreturn_t ast_i2c_interrupt(int irq, void *dev_id)
 {
 	return IRQ_NONE;
 }
 
 
-static int aspeed_i2c_probe(struct platform_device *pdev)
+static int ast_i2c_probe(struct platform_device *pdev)
 {
-	struct aspeed_i2c *dev;
+	struct ast_i2c *i2c;
 	struct resource *res;
 	int rc;
 	u32 bus_clk_rate;
 
-	dev = devm_kzalloc(&pdev->dev, sizeof(*dev), GFP_KERNEL);
-	if (!dev)
+	i2c = devm_kzalloc(&pdev->dev, sizeof(*i2c), GFP_KERNEL);
+	if (!i2c)
 		return -ENOMEM;
-	dev->dev = &pdev->dev;
+	i2c->dev = &pdev->dev;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
 		return -ENODEV;
 
-	dev->base = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(dev->base))
-		return PTR_ERR(dev->base);
+	i2c->base = devm_ioremap_resource(&pdev->dev, res);
+	if (IS_ERR(i2c->base))
+		return PTR_ERR(i2c->base);
 
-	dev->irq = platform_get_irq(pdev, 0);
-	if (dev->irq < 0)
-		return dev->irq;
+	i2c->irq = platform_get_irq(pdev, 0);
+	if (i2c->irq < 0)
+		return i2c->irq;
 
-	rc = devm_request_irq(&pdev->dev, dev->irq, aspeed_i2c_interrupt, 0,
-			      dev_name(dev->dev), dev);
+	rc = devm_request_irq(&pdev->dev, i2c->irq, ast_i2c_interrupt, 0,
+			      dev_name(i2c->dev), i2c);
 	if (rc) {
-		dev_err(dev->dev, "cannot get irq %d: %d\n", dev->irq, rc);
+		dev_err(i2c->dev, "cannot get irq %d: %d\n", i2c->irq, rc);
 		return rc;
 	}
 
-	platform_set_drvdata(pdev, dev);
+	platform_set_drvdata(pdev, i2c);
 
-	dev->clk = devm_clk_get(dev->dev, NULL);
-	if (IS_ERR(dev->clk)) {
-		dev_err(dev->dev, "no clock defined\n");
+	i2c->clk = devm_clk_get(i2c->dev, NULL);
+	if (IS_ERR(i2c->clk)) {
+		dev_err(i2c->dev, "no clock defined\n");
 		return -ENODEV;
 	}
-	clk_prepare_enable(dev->clk);
+	clk_prepare_enable(i2c->clk);
 
-	rc = of_property_read_u32(dev->dev->of_node, "clock-frequency",
+	rc = of_property_read_u32(i2c->dev->of_node, "clock-frequency",
 			&bus_clk_rate);
-	if (rc)
-		bus_clk_rate = DEFAULT_I2C_CLK_HZ;
-
-	aspeed_calc_i2c_clock(dev, bus_clk_rate);
-	aspeed_init_i2c_bus(dev);
-
-	snprintf(dev->adapter.name, sizeof(dev->adapter.name), "AST2400");
-	i2c_set_adapdata(&dev->adapter, dev);
-	dev->adapter.owner = THIS_MODULE;
-	dev->adapter.class = I2C_CLASS_DEPRECATED;
-	dev->adapter.algo = &aspeed_i2c_algorithm;
-	dev->adapter.dev.parent = dev->dev;
-	dev->adapter.nr = pdev->id;
-	dev->adapter.timeout = ASPEED_I2C_TIMEOUT;
-	dev->adapter.dev.of_node = pdev->dev.of_node;
-
-	pm_runtime_set_autosuspend_delay(dev->dev, AUTOSUSPEND_TIMEOUT);
-	pm_runtime_use_autosuspend(dev->dev);
-	pm_runtime_set_active(dev->dev);
-	pm_runtime_enable(dev->dev);
-
-	rc = i2c_add_numbered_adapter(&dev->adapter);
 	if (rc) {
-		dev_err(dev->dev, "adapter %s registration failed\n",
-			dev->adapter.name);
-		clk_disable_unprepare(dev->clk);
+		dev_warn(i2c->dev, "clock-frequency property not found, using default\n");
+		bus_clk_rate = DEFAULT_I2C_CLK_HZ;
+	}
 
-		pm_runtime_disable(dev->dev);
-		pm_runtime_set_suspended(dev->dev);
+	ast_calc_i2c_clock(i2c, bus_clk_rate);
+	ast_init_i2c_bus(i2c);
+
+	snprintf(i2c->adapter.name, sizeof(i2c->adapter.name), "AST2400");
+	i2c_set_adapdata(&i2c->adapter, i2c);
+	i2c->adapter.owner = THIS_MODULE;
+	i2c->adapter.class = I2C_CLASS_DEPRECATED;
+	i2c->adapter.algo = &ast_i2c_algorithm;
+	i2c->adapter.dev.parent = i2c->dev;
+	i2c->adapter.nr = pdev->id;
+	i2c->adapter.timeout = ASPEED_I2C_TIMEOUT;
+	i2c->adapter.dev.of_node = pdev->dev.of_node;
+
+	pm_runtime_set_autosuspend_delay(i2c->dev, AUTOSUSPEND_TIMEOUT);
+	pm_runtime_use_autosuspend(i2c->dev);
+	pm_runtime_set_active(i2c->dev);
+	pm_runtime_enable(i2c->dev);
+
+	rc = i2c_add_numbered_adapter(&i2c->adapter);
+	if (rc) {
+		dev_err(i2c->dev, "adapter %s registration failed\n",
+			i2c->adapter.name);
+		clk_disable_unprepare(i2c->clk);
+
+		pm_runtime_disable(i2c->dev);
+		pm_runtime_set_suspended(i2c->dev);
 
 		return rc;
 	}
@@ -199,7 +218,7 @@ static int aspeed_i2c_probe(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_OF
-static const struct of_device_id aspeed_i2c_of_match_table[] = {
+static const struct of_device_id ast_i2c_of_match_table[] = {
 	{
 		.compatible = "aspeed,ast2400-i2c",
 	},
@@ -207,14 +226,14 @@ static const struct of_device_id aspeed_i2c_of_match_table[] = {
 };
 #endif
 
-static struct platform_driver aspeed_i2c_driver = {
+static struct platform_driver ast_i2c_driver = {
 	.driver		= {
-		.name	= "aspeed_i2c",
-		.of_match_table = of_match_ptr(aspeed_i2c_of_match_table),
+		.name	= "ast_i2c",
+		.of_match_table = of_match_ptr(ast_i2c_of_match_table),
 	},
 };
 
-module_platform_driver_probe(aspeed_i2c_driver, aspeed_i2c_probe);
+module_platform_driver_probe(ast_i2c_driver, ast_i2c_probe);
 
 MODULE_DESCRIPTION("Aspeed AST24xx i2c driver");
 MODULE_AUTHOR("Joel Stanley <joel@jms.id.au>");
