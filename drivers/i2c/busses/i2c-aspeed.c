@@ -90,6 +90,7 @@ static void ast_disable_i2c_interrupts(struct ast_i2c *dev)
 
 static void ast_init_i2c_bus(struct ast_i2c *i2c)
 {
+#if 0
 	ast_disable_i2c_interrupts(i2c);
 
 	ast_i2c_write(i2c, 0x00000001, I2C_DEV_CR);
@@ -100,6 +101,7 @@ static void ast_init_i2c_bus(struct ast_i2c *i2c)
 	ast_i2c_write(i2c, 0xffffffff, I2C_DEV_ISR);
 	/* Enable interrupt */
 	ast_i2c_write(i2c, 0x000000bf, I2C_DEV_INTCR);
+#endif
 }
 
 /*
