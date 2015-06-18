@@ -97,8 +97,8 @@ static int ast_pinconf_set(struct pinctrl_dev *pctldev, unsigned pin,
 {
 	struct ast_pinctrl_desc *desc;
 
-	if (pin >= ARRAY_SIZE(pctldev->desc->pins)) {
-		drv_err(pctldev->dev, "pin number %d is too damn high\n",
+	if (pin >= pctldev->desc->npins) {
+		dev_err(pctldev->dev, "pin number %d is too damn high\n",
 				pin);
 		return -ERANGE;
 	}
