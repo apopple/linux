@@ -85,7 +85,7 @@
 				reg = <0x1e72000 0x8000>;	// 32K
 			};
 
-			i2c: i2c@1e6e2000 {
+			i2c: i2c@1e78a000 {
 				compatible = "aspeed,ast2400-i2c", "i2c";
 				reg = <0x1e78a000 0x1000>;
 				interrupts = <12>;
