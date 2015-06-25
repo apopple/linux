@@ -56,12 +56,12 @@ const static struct i2c_algorithm ast_i2c_algorithm = {
 	.functionality	= ast_i2c_func,
 };
 
-#define I2C_ISR_MASK	0x00
-#define I2C_ISR_TGT	0x08
+#define I2C_IRQ_STATUS	0x00
+#define I2C_IRQ_EN	0x08
 
-#define I2C_DEV_CR	0x00
-#define I2C_DEV_TMR1	0x04
-#define I2C_DEV_TMR2	0x08
+#define I2C_DEV_CTRL	0x00
+#define I2C_DEV_TIME1	0x04
+#define I2C_DEV_TIME2	0x08
 #define I2C_DEV_INTCR	0x0c
 #define I2C_DEV_ISR	0x10
 #define I2C_DEV_STATUS	0x14
@@ -90,10 +90,35 @@ static void ast_disable_i2c_interrupts(struct ast_i2c *dev)
 
 static void ast_init_i2c_bus(struct ast_i2c *i2c)
 {
+	u32 ctrl;
+	ast_i2c_write(i2c, 0x00000000, I2C_IRQ_STATUS);
+
+	ctrl = ast_i2c_read(i2c, I2C_DEV_CTRL) | MASTER_EN;
+
+	ast_i2c_write(i2c, ast_i2c_read(i2c, I2C_DEV_CTRL) | MASTER_EN,
+		      I2C_DEV_CTRL);
+
+	if (i2c->ast_i2c_data->bus_clk / 1000 > 400) {
+		ast_i2c_write(i2c, ast_i2c_read(i2c, I2C_FUN_CTRL_REG) |
+					AST_I2CD_M_HIGH_SPEED_EN |
+					AST_I2CD_M_SDA_DRIVE_1T_EN |
+					AST_I2CD_SDA_DRIVE_1T_EN,
+			      I2C_FUN_CTRL_REG);
+
+		/* Set AC Timing */
+		ast_i2c_write(i2c, 0x3, I2C_AC_TIMING_REG2);
+		ast_i2c_write(i2c, select_i2c_clock(i2c), I2C_AC_TIMING_REG1);
+	} else {
+		/* Target apeed is xxkHz */
+		ast_i2c_write(i2c, select_i2c_clock(i2c), I2C_AC_TIMING_REG1);
+		ast_i2c_write(i2c, AST_NO_TIMEOUT_CTRL, I2C_AC_TIMING_REG2);
+	}
+
+
 #if 0
 	ast_disable_i2c_interrupts(i2c);
 
-	ast_i2c_write(i2c, 0x00000001, I2C_DEV_CR);
+	ast_i2c_write(i2c, 0x00000001, I2C_DEV_CTRL);
 	/* Hard code 100kHz assuming PCLK of 50MHz */
 	ast_i2c_write(i2c, 0x77777355, I2C_DEV_TMR1);
 	ast_i2c_write(i2c, 0x00000000, I2C_DEV_TMR2);
