@@ -88,6 +88,8 @@ static void ast_disable_i2c_interrupts(struct ast_i2c *dev)
 {
 }
 
+#define MASTER_EN 0x0
+
 static void ast_init_i2c_bus(struct ast_i2c *i2c)
 {
 	u32 ctrl;
@@ -98,6 +100,7 @@ static void ast_init_i2c_bus(struct ast_i2c *i2c)
 	ast_i2c_write(i2c, ast_i2c_read(i2c, I2C_DEV_CTRL) | MASTER_EN,
 		      I2C_DEV_CTRL);
 
+#if 0 
 	if (i2c->ast_i2c_data->bus_clk / 1000 > 400) {
 		ast_i2c_write(i2c, ast_i2c_read(i2c, I2C_FUN_CTRL_REG) |
 					AST_I2CD_M_HIGH_SPEED_EN |
@@ -113,7 +116,7 @@ static void ast_init_i2c_bus(struct ast_i2c *i2c)
 		ast_i2c_write(i2c, select_i2c_clock(i2c), I2C_AC_TIMING_REG1);
 		ast_i2c_write(i2c, AST_NO_TIMEOUT_CTRL, I2C_AC_TIMING_REG2);
 	}
-
+#endif
 
 #if 0
 	ast_disable_i2c_interrupts(i2c);
