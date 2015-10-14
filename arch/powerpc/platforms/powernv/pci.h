@@ -7,6 +7,7 @@ enum pnv_phb_type {
 	PNV_PHB_P5IOC2	= 0,
 	PNV_PHB_IODA1	= 1,
 	PNV_PHB_IODA2	= 2,
+	PNV_PHB_NPU	= 3,
 };
 
 /* Precise PHB model for error management */
@@ -15,6 +16,7 @@ enum pnv_phb_model {
 	PNV_PHB_MODEL_P5IOC2,
 	PNV_PHB_MODEL_P7IOC,
 	PNV_PHB_MODEL_PHB3,
+	PNV_PHB_MODEL_NPU,
 };
 
 #define PNV_PCI_DIAG_BUF_SIZE	8192
@@ -229,6 +231,7 @@ extern void pnv_pci_setup_iommu_table(struct iommu_table *tbl,
 extern void pnv_pci_init_p5ioc2_hub(struct device_node *np);
 extern void pnv_pci_init_ioda_hub(struct device_node *np);
 extern void pnv_pci_init_ioda2_phb(struct device_node *np);
+extern void pnv_pci_init_npu_phb(struct device_node *np);
 extern void pnv_pci_ioda_tce_invalidate(struct iommu_table *tbl,
 					__be64 *startp, __be64 *endp, bool rm);
 extern void pnv_pci_reset_secondary_bus(struct pci_dev *dev);
@@ -237,5 +240,12 @@ extern int pnv_eeh_phb_reset(struct pci_controller *hose, int option);
 extern void pnv_pci_dma_dev_setup(struct pci_dev *pdev);
 extern int pnv_setup_msi_irqs(struct pci_dev *pdev, int nvec, int type);
 extern void pnv_teardown_msi_irqs(struct pci_dev *pdev);
+
+/* Nvlink functions */
+extern void pnv_pci_npu_setup_dma_pe(struct pnv_phb *npu,
+				struct pnv_ioda_pe *npu_pe);
+extern int pnv_pci_npu_dma_set_bypass(struct pnv_phb *npu,
+				struct pnv_ioda_pe *npu_pe, bool enabled);
+extern int pnv_npu_dma_set_mask(struct pci_dev *pdev, u64 dma_mask);
 
 #endif /* __POWERNV_PCI_H */

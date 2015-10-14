@@ -149,4 +149,8 @@ extern void pcibios_setup_phb_io_space(struct pci_controller *hose);
 extern void pcibios_scan_phb(struct pci_controller *hose);
 
 #endif	/* __KERNEL__ */
+
+extern struct pci_dev *pnv_get_nvl_pci_dev(struct pci_dev *nvl_dev);
+extern struct pci_dev *pnv_get_pci_nvl_dev(struct pci_dev *pci_dev, int index);
+
 #endif /* __ASM_POWERPC_PCI_H */
