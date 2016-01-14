@@ -297,6 +297,10 @@ define merge_into_defconfig
 	+$(Q)$(MAKE) -f $(srctree)/Makefile olddefconfig
 endef
 
+PHONY += ppc64tiny_le_defconfig
+ppc64tiny_le_defconfig:
+	$(call merge_into_defconfig,ppc64tiny_defconfig,le)
+
 PHONY += pseries_le_defconfig
 pseries_le_defconfig:
 	$(call merge_into_defconfig,pseries_defconfig,le)
