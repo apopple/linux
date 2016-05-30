@@ -9,6 +9,22 @@
  * License as published by the Free Software Foundation.
  */
 
+#include <linux/slab.h>
+#include <linux/sched.h>
+#include <linux/mm.h>
+#include <linux/export.h>
+#include <linux/notifier.h>
+#include <linux/mmu_notifier.h>
+#include <linux/mmu_context.h>
+#include <linux/of.h>
+#include <linux/platform_device.h>
+#include <linux/list.h>
+
+#include <asm/uaccess.h>
+#include <asm/reg.h>
+#include <asm/opal.h>
+#include <asm/io.h>
+
 #include <linux/export.h>
 #include <linux/pci.h>
 #include <linux/memblock.h>
@@ -54,6 +70,12 @@ struct pci_dev *pnv_pci_get_npu_dev(struct pci_dev *gpdev, int index)
 {
 	struct device_node *dn;
 	struct pci_dev *npdev;
+
+	if (WARN_ON(!gpdev))
+		return NULL;
+
+	if (WARN_ON(!gpdev->dev.of_node))
+		return NULL;
 
 	/* Get assoicated PCI device */
 	dn = of_parse_phandle(gpdev->dev.of_node, "ibm,npu", index);
@@ -358,4 +380,329 @@ struct pnv_ioda_pe *pnv_pci_npu_setup_iommu(struct pnv_ioda_pe *npe)
 	}
 
 	return gpe;
+}
+
+struct npu_context {
+	struct mm_struct *mm;
+	struct mmu_notifier mn;
+	struct npu *npu;
+
+	/* Callback to stop translation requests */
+	npu_context_destroy_cb *release_cb;
+	/* Private pointer for usage be device drivers */
+	void *priv;
+	/* Firmware allocated hardware npu context id */
+	int id;
+};
+
+#define npu_to_phb(x) container_of(x, struct pnv_phb, npu)
+
+/*
+ * Find a free MMIO ATSD register and mark it in use. Return -ENOSPC
+ * if none are available.
+ */
+static int get_mmio_atsd_reg(struct npu *npu)
+{
+	int i;
+
+	for (i = 0; i < npu->mmio_atsd_count; i++) {
+		if (test_and_set_bit(i, &npu->mmio_atsd_usage))
+			return i;
+	}
+
+	return -ENOSPC;
+}
+
+static void put_mmio_atsd_reg(struct npu *npu, int reg)
+{
+	clear_bit(reg, &npu->mmio_atsd_usage);
+}
+
+#define iowrite64be writeq_be
+#define ioread64be readq_be
+
+static void mmio_invalidate_pid(struct npu *npu, unsigned long pid)
+{
+	int mmio_atsd_reg;
+	unsigned long launch;
+
+	do {
+		mmio_atsd_reg = get_mmio_atsd_reg(npu);
+	} while (mmio_atsd_reg < 0);
+
+	/* Radix mode */
+	launch = PPC_BIT(0);
+
+	/* RIC */
+	launch |= 2UL << PPC_BITLSHIFT(2);
+
+	/* IS */
+	launch |= PPC_BIT(12);
+
+	/* PRS */
+	launch |= PPC_BIT(13);
+
+	/* AP */
+	launch |= (u64) mmu_get_ap(mmu_virtual_psize) << PPC_BITLSHIFT(17);
+
+	/* L */
+	launch |= PPC_BIT(18);
+
+	/* PID */
+	launch |= pid << PPC_BITLSHIFT(38);
+
+	/* Invalidating the entire process shouldn't need a va */
+	iowrite64be(0, npu->mmio_atsd_regs[mmio_atsd_reg] + 1);
+	iowrite64be(launch, npu->mmio_atsd_regs[mmio_atsd_reg]);
+
+	/* Wait for completion */
+	while (ioread64be(npu->mmio_atsd_regs[mmio_atsd_reg] + 2))
+		cpu_relax();
+	put_mmio_atsd_reg(npu, mmio_atsd_reg);
+}
+
+static void mmio_invalidate_va(struct npu *npu, unsigned long va,
+			unsigned long pid)
+{
+	int mmio_atsd_reg;
+	unsigned long launch;
+
+	do {
+		mmio_atsd_reg = get_mmio_atsd_reg(npu);
+	} while (mmio_atsd_reg < 0);
+
+	/* Radix mode */
+	launch = PPC_BIT(0);
+
+	/* PRS */
+	launch |= PPC_BIT(13);
+
+	/* AP */
+	launch |= (u64) mmu_get_ap(mmu_virtual_psize) << PPC_BITLSHIFT(17);
+
+	/* L */
+	launch |= PPC_BIT(18);
+
+	/* PID */
+	launch |= pid << PPC_BITLSHIFT(38);
+
+	iowrite64be(va, npu->mmio_atsd_regs[mmio_atsd_reg] + 1);
+	iowrite64be(launch, npu->mmio_atsd_regs[mmio_atsd_reg]);
+
+	/* Wait for completion */
+	while (ioread64be(npu->mmio_atsd_regs[mmio_atsd_reg] + 2));
+	put_mmio_atsd_reg(npu, mmio_atsd_reg);
+}
+
+#define mn_to_npu_context(x) container_of(x, struct npu_context, mn)
+
+static void pnv_npu2_mn_release(struct mmu_notifier *mn,
+				struct mm_struct *mm)
+{
+	struct npu_context *context = mn_to_npu_context(mn);
+	struct npu *npu = context->npu;
+	struct pnv_phb *phb;
+
+	phb = npu_to_phb(npu);
+
+	BUG_ON(context->id == NV_NMMU_CONTEXT_INVALID);
+
+	/* Call into device driver to stop requests to the NMMU */
+	if (context->release_cb)
+		context->release_cb(context, context->priv);
+	opal_npu_destroy_context(phb->opal_id, context->id);
+	context->id = NV_NMMU_CONTEXT_INVALID;
+
+	/* There should be no more translation requests for this PID,
+	 * but we need to ensure any entries for it are removed from
+	 * the TLB. */
+	mmio_invalidate_pid(npu, mm->context.id);
+
+	return;
+}
+
+static void pnv_npu2_mn_change_pte(struct mmu_notifier *mn,
+				struct mm_struct *mm,
+				unsigned long address,
+				pte_t pte)
+{
+	struct npu *npu = mn_to_npu_context(mn)->npu;
+
+	mmio_invalidate_va(npu, address, mm->context.id);
+}
+
+static void pnv_npu2_mn_invalidate_page(struct mmu_notifier *mn,
+					struct mm_struct *mm,
+					unsigned long address)
+{
+	struct npu *npu = mn_to_npu_context(mn)->npu;
+
+	mmio_invalidate_va(npu, address, mm->context.id);
+}
+
+static void pnv_npu2_mn_invalidate_range(struct mmu_notifier *mn,
+					struct mm_struct *mm,
+					unsigned long start, unsigned long end)
+{
+	struct npu *npu = mn_to_npu_context(mn)->npu;
+	unsigned long address;
+
+	for (address = start; address <= end; address += PAGE_SIZE)
+		mmio_invalidate_va(npu, address, mm->context.id);
+}
+
+static const struct mmu_notifier_ops nv_nmmu_notifier_ops = {
+	.release = pnv_npu2_mn_release,
+	.change_pte = pnv_npu2_mn_change_pte,
+	.invalidate_page = pnv_npu2_mn_invalidate_page,
+	.invalidate_range = pnv_npu2_mn_invalidate_range,
+};
+
+/*
+ * Call into OPAL to setup the nmmu context for the current task in
+ * the NPU. This must be called to setup the context tables before the
+ * GPU issues ATRs. pdev should be a pointed to PCIe GPU device.
+ *
+ * A notifier can be registered to receive callbacks about mm changes.
+ *
+ * Returns an error if there are no contexts currently available
+ * (should only happen on DD1) or a context_id which should be passed
+ * to pnv_npu2_handle_fault().
+ */
+npu_context pnv_npu2_init_context(struct pci_dev *gpdev, unsigned long flags,
+				npu_context_destroy_cb *cb, void *priv)
+{
+	int id;
+	int lpid = 0;
+	struct mm_struct *mm = current->mm;
+	struct npu_context *npu_context;
+	struct pnv_phb *nphb;
+	struct npu *npu;
+
+	/* The gpdev should have at least one nvlink (index 0)
+	 * associated with it. It's possible we could have multiple
+	 * links going to the same GPU but different NPUs
+	 * (chips). However this seems unlikely so we assume this
+	 * isn't the case, otherwise we would need to search all
+	 * possible indicies. */
+	struct pci_dev *npdev = pnv_pci_get_npu_dev(gpdev, 0);
+
+	if (!npdev)
+		/* No nvlink associated with this GPU device */
+		return ERR_PTR(-ENODEV);
+
+	if (!mm) {
+		printk(KERN_ALERT "Init context should not be called for a kernel thread\n");
+		return ERR_PTR(-EINVAL);
+	}
+
+	nphb = pci_bus_to_host(npdev->bus)->private_data;
+	npu = &nphb->npu;
+
+	/* Return an error if the context is already setup */
+	if (mm->context.npu[npu->index])
+		return ERR_PTR(-EEXIST);
+
+	/* Setup the NPU context tables */
+	id = opal_npu_init_context(nphb->opal_id, mm->context.id, flags, lpid);
+	if (id < 0)
+		return ERR_PTR(-ENOSPC);
+
+	npu_context = kzalloc(sizeof(struct npu_context), GFP_KERNEL);
+	if (!npu_context)
+		return ERR_PTR(-ENOMEM);
+
+	npu_context->id = id;
+	npu_context->mn.ops = &nv_nmmu_notifier_ops;
+	npu_context->npu = npu;
+	npu_context->mm = mm;
+	npu_context->release_cb = cb;
+	npu_context->priv = priv;
+	__mmu_notifier_register(&npu_context->mn, mm);
+	mm->context.npu[npu->index] = npu_context;
+
+	return npu_context;
+}
+EXPORT_SYMBOL(pnv_npu2_init_context);
+
+int pnv_npu2_destroy_context(npu_context context)
+{
+	mmu_notifier_unregister(&context->mn, context->mm);
+
+	/* This mm context is no longer associated with the NPU so
+	 * clear it from the mm as subsequent calls to
+	 * pnv_npu2_init_context() are still possible for this mm. */
+	context->mm->context.npu[context->npu->index] = NULL;
+	kfree(context);
+       	return 0;
+}
+EXPORT_SYMBOL(pnv_npu2_destroy_context);
+
+/*
+ * Assumes mmap_sem is held for the contexts associated mm.
+ */
+int pnv_npu2_handle_fault(npu_context context, uintptr_t *ea,
+			unsigned long *flags, unsigned long *status, int count)
+{
+	u64 rc = 0;
+	int i, is_write;
+	struct page *page[1];
+
+	/* mmap_sem should be held so the struct_mm must be present */
+	struct mm_struct *mm = context->mm;
+
+	WARN_ON(!rwsem_is_locked(&mm->mmap_sem));
+
+	for (i = 0; i < count; i++) {
+		is_write = flags[i] & NPU2_WRITE;
+		rc = get_user_pages_remote(NULL, mm, ea[i], 1,
+					is_write ? FOLL_WRITE : 0, page, NULL, NULL);
+
+		/* To support virtualised environments we will have to
+		 *  do an access to the page to ensure it gets faulted
+		 *  into the hypervisor. */
+
+		if (rc != 1) {
+			status[i] = rc;
+			continue;
+		}
+
+		status[i] = 0;
+		put_page(page[0]);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(pnv_npu2_handle_fault);
+
+int pnv_npu2_init(struct pnv_phb *phb)
+{
+	unsigned int i;
+	u64 mmio_atsd;
+	struct device_node *dn;
+	struct pci_dev *gpdev;
+	static int npu_index = 0;
+	uint64_t rc = 0;
+
+	for_each_child_of_node(phb->hose->dn, dn) {
+		gpdev = pnv_pci_get_gpu_dev(get_pci_dev(dn));
+		if (gpdev) {
+			rc = opal_npu_map_lpar(phb->opal_id,
+					PCI_DEVID(gpdev->bus->number, gpdev->devfn),
+					0, 0);
+			if (rc)
+				dev_err(&gpdev->dev, "Error %lld mapping device to LPAR\n",
+					rc);
+		}
+	}
+
+	for (i = 0; !of_property_read_u64_index(phb->hose->dn, "ibm,mmio-atsd", i, &mmio_atsd); i++)
+		phb->npu.mmio_atsd_regs[i] = ioremap(mmio_atsd, 32);
+
+	pr_info("NPU%lld: Found %d MMIO ATSD registers", phb->opal_id, i);
+	phb->npu.mmio_atsd_count = i;
+	phb->npu.mmio_atsd_usage = 0;
+	phb->npu.index = npu_index++;
+
+	return 0;
 }
