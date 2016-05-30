@@ -3746,6 +3746,9 @@ static void __init pnv_pci_init_ioda_phb(struct device_node *np,
 	/* Remove M64 resource if we can't configure it successfully */
 	if (!phb->init_m64 || phb->init_m64(phb))
 		hose->mem_resources[1].flags = 0;
+
+	if (ioda_type == PNV_PHB_NPU)
+		pnv_npu2_init(phb);
 }
 
 void __init pnv_pci_init_ioda2_phb(struct device_node *np)

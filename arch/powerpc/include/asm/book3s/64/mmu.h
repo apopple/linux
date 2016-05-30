@@ -66,6 +66,8 @@ typedef struct {
 	mm_context_id_t id;
 	u16 user_psize;		/* page size index */
 
+	struct npu_context *npu; /* for NPU NMMU context */
+
 #ifdef CONFIG_PPC_MM_SLICES
 	u64 low_slices_psize;	/* SLB page size encodings */
 	unsigned char high_slices_psize[SLICE_ARRAY_SIZE];

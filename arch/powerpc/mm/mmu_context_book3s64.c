@@ -67,6 +67,7 @@ static int radix__init_new_context(struct mm_struct *mm, int index)
 	 */
 	rts_field = radix__get_tree_size();
 	process_tb[index].prtb0 = cpu_to_be64(rts_field | __pa(mm->pgd) | RADIX_PGD_INDEX_SIZE);
+	mm->context.npu = NULL;
 	return 0;
 }
 
