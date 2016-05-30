@@ -62,9 +62,13 @@ extern struct patb_entry *partition_tb;
 typedef unsigned long mm_context_id_t;
 struct spinlock;
 
+#define NV_MAX_NPUS 2
 typedef struct {
 	mm_context_id_t id;
 	u16 user_psize;		/* page size index */
+
+	/* NPU NMMU context, one per NPU */
+	struct npu_context *npu[NV_MAX_NPUS];
 
 #ifdef CONFIG_PPC_MM_SLICES
 	u64 low_slices_psize;	/* SLB page size encodings */

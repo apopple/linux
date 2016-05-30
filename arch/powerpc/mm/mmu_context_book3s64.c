@@ -60,6 +60,7 @@ again:
 EXPORT_SYMBOL_GPL(__init_new_context);
 static int radix__init_new_context(struct mm_struct *mm, int index)
 {
+	int i;
 	unsigned long rts_field;
 
 	/*
@@ -67,6 +68,8 @@ static int radix__init_new_context(struct mm_struct *mm, int index)
 	 */
 	rts_field = radix__get_tree_size();
 	process_tb[index].prtb0 = cpu_to_be64(rts_field | __pa(mm->pgd) | RADIX_PGD_INDEX_SIZE);
+	for (i = 0; i < NV_MAX_NPUS; i++)
+		mm->context.npu[i] = NULL;
 	return 0;
 }
 
