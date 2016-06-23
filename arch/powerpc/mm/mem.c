@@ -126,7 +126,7 @@ int __weak remove_section_mapping(unsigned long start, unsigned long end)
 	return -ENODEV;
 }
 
-int arch_add_memory(int nid, u64 start, u64 size, bool for_device)
+int __meminit arch_add_memory(int nid, u64 start, u64 size, bool for_device)
 {
 	struct pglist_data *pgdata;
 	struct zone *zone;
@@ -137,7 +137,7 @@ int arch_add_memory(int nid, u64 start, u64 size, bool for_device)
 	pgdata = NODE_DATA(nid);
 
 	start = (unsigned long)__va(start);
-	rc = create_section_mapping(start, start + size);
+	rc = vmemmap_create_mapping(start, size, __pa(start));
 	if (rc) {
 		pr_warning(
 			"Unable to create mapping for hot added memory 0x%llx..0x%llx: %d\n",
@@ -153,7 +153,7 @@ int arch_add_memory(int nid, u64 start, u64 size, bool for_device)
 }
 
 #ifdef CONFIG_MEMORY_HOTREMOVE
-int arch_remove_memory(u64 start, u64 size)
+int __meminit arch_remove_memory(u64 start, u64 size)
 {
 	unsigned long start_pfn = start >> PAGE_SHIFT;
 	unsigned long nr_pages = size >> PAGE_SHIFT;
@@ -167,7 +167,7 @@ int arch_remove_memory(u64 start, u64 size)
 
 	/* Remove htab bolted mappings for this section of memory */
 	start = (unsigned long)__va(start);
-	ret = remove_section_mapping(start, start + size);
+	vmemmap_remove_mapping(start, size);
 
 	/* Ensure all vmalloc mappings are flushed in case they also
 	 * hit that section of memory
