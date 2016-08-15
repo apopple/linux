@@ -763,6 +763,9 @@ static int __init opal_init(void)
 	/* Initialise OPAL kmsg dumper for flushing console on panic */
 	opal_kmsg_init();
 
+	/* Update partition table control register on all Nest MMUs */
+	opal_nmmu_set_ptcr(-1UL, __pa(partition_tb) | (PATB_SIZE_SHIFT - 12));
+
 	return 0;
 }
 machine_subsys_initcall(powernv, opal_init);
