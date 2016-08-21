@@ -73,6 +73,12 @@ struct pci_dev *pnv_pci_get_npu_dev(struct pci_dev *gpdev, int index)
 	struct device_node *dn;
 	struct pci_dev *npdev;
 
+	if (WARN_ON(!gpdev))
+		return NULL;
+
+	if (WARN_ON(!gpdev->dev.of_node))
+		return NULL;
+
 	/* Get assoicated PCI device */
 	dn = of_parse_phandle(gpdev->dev.of_node, "ibm,npu", index);
 	if (!dn)
@@ -732,12 +738,22 @@ int pnv_npu2_init(struct pnv_phb *phb)
 {
 	unsigned int i;
 	u64 mmio_atsd;
+	struct device_node *dn;
+	struct pci_dev *gpdev;
 	static int npu_index = 0;
+	uint64_t rc = 0;
 
-	/* For the moment map bogus bdfn's
-	 * TODO: Find associated device bdfn's and add them here */
-	for (i = 0; i < 16; i++)
-		opal_npu_map_lpar(phb->opal_id, 0x1234, 0, 0);
+	for_each_child_of_node(phb->hose->dn, dn) {
+		gpdev = pnv_pci_get_gpu_dev(get_pci_dev(dn));
+		if (gpdev) {
+			rc = opal_npu_map_lpar(phb->opal_id,
+					PCI_DEVID(gpdev->bus->number, gpdev->devfn),
+					0, 0);
+			if (rc)
+				dev_err(&gpdev->dev, "Error %lld mapping device to LPAR\n",
+					rc);
+		}
+	}
 
 	for (i = 0; !of_property_read_u64_index(phb->hose->dn, "ibm,mmio-atsd", i, &mmio_atsd); i++)
 		phb->npu.mmio_atsd_regs[i] = ioremap(mmio_atsd, 32);
