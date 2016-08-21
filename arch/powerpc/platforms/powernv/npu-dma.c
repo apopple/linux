@@ -38,9 +38,6 @@
 #include "powernv.h"
 #include "pci.h"
 
-static spinlock_t context_list_lock;
-static struct list_head context_list;
-
 typedef struct npu_context * npu_context;
 
 /*
@@ -390,9 +387,6 @@ struct npu_context {
 	int id;
 };
 
-static struct npu *npus[NV_MAX_NPUS];
-static int npu_count;
-
 #define npu_to_phb(x) container_of(x, struct pnv_phb, npu)
 
 /* Get an mm_struct from an npu_context making sure it is still active
@@ -411,9 +405,6 @@ static struct mm_struct *mm_from_npu_context(npu_context context)
 	if (!mm)
 		/* mm no longer exists */
 		goto out;
-
-	if (WARN_ON(mm->context.npu != context))
-		return NULL;
 
 	/* We need to call use_mm() on the mm but first we need to
 	 * make sure the mm isn't already in the process of being
@@ -534,16 +525,15 @@ static void mmio_invalidate_va(struct npu *npu, unsigned long va,
 	put_mmio_atsd_reg(npu, mmio_atsd_reg);
 }
 
+#define mn_to_npu_context(x) container_of(x, struct npu_context, mn)
+
 static void pnv_npu2_mn_release(struct mmu_notifier *mn,
 				struct mm_struct *mm)
 {
-	struct npu_context *context = mm->context.npu;
-	struct npu *npu;
+	struct npu_context *context = mn_to_npu_context(mn);
+	struct npu *npu = context->npu;
 	struct pnv_phb *phb;
 
-	/* TODO: This actually needs to be a list as a single context
-	 * could be active on multiple NPUs/GPUs */
-	npu = context->npu;
 	phb = npu_to_phb(npu);
 
 	spin_lock(&context->lock);
@@ -566,7 +556,7 @@ static void pnv_npu2_mn_change_pte(struct mmu_notifier *mn,
 				unsigned long address,
 				pte_t pte)
 {
-	struct npu *npu = mm->context.npu->npu;
+	struct npu *npu = mn_to_npu_context(mn)->npu;
 
 	mmio_invalidate_va(npu, address, mm->context.id);
 }
@@ -575,7 +565,7 @@ static void pnv_npu2_mn_invalidate_page(struct mmu_notifier *mn,
 					struct mm_struct *mm,
 					unsigned long address)
 {
-	struct npu *npu = mm->context.npu->npu;
+	struct npu *npu = mn_to_npu_context(mn)->npu;
 
 	mmio_invalidate_va(npu, address, mm->context.id);
 }
@@ -584,7 +574,7 @@ static void pnv_npu2_mn_invalidate_range(struct mmu_notifier *mn,
 					struct mm_struct *mm,
 					unsigned long start, unsigned long end)
 {
-	struct npu *npu = mm->context.npu->npu;
+	struct npu *npu = mn_to_npu_context(mn)->npu;
 	unsigned long address;
 
 	for (address = start; address <= end; address += PAGE_SIZE)
@@ -607,20 +597,25 @@ static const struct mmu_notifier_ops nv_nmmu_notifier_ops = {
  * (should only happen on DD1) or a context_id which should be passed
  * to pnv_npu2_handle_fault().
  */
-npu_context pnv_npu2_init_context(struct pci_dev *pdev, unsigned long flags)
+npu_context pnv_npu2_init_context(struct pci_dev *gpdev, unsigned long flags)
 {
 	int id;
 	int lpid = 0;
 	struct mm_struct *mm = current->mm;
 	struct npu_context *npu_context;
+	struct pnv_phb *nphb;
+	struct npu *npu;
 
-	/* TODO: We have to actually derive this from the linked NPU
-	 * device, but we don't support that in firmware yet so this
-	 * will have to do for the moment. */
-	struct pnv_phb *phb = npu_to_phb(npus[0]);
-	struct npu *npu = &phb->npu;
+	/* The gpdev should have at least one nvlink (index 0)
+	 * associated with it. It's possible we could have multiple
+	 * links going to the same GPU but different NPUs
+	 * (chips). However this seems unlikely so we assume this
+	 * isn't the case, otherwise we would need to search all
+	 * possible indicies. */
+	struct pci_dev *npdev = pnv_pci_get_npu_dev(gpdev, 0);
 
-	if (!npu)
+	if (!npdev)
+		/* No nvlink associated with this GPU device */
 		return ERR_PTR(-ENODEV);
 
 	if (!mm) {
@@ -628,14 +623,15 @@ npu_context pnv_npu2_init_context(struct pci_dev *pdev, unsigned long flags)
 		return ERR_PTR(-EINVAL);
 	}
 
-	/* Make sure we don't already have a context setup */
-	if (mm->context.npu) {
-		WARN_ON(1);
-		return ERR_PTR(-EINVAL);
-	}
+	nphb = pci_bus_to_host(npdev->bus)->private_data;
+	npu = &nphb->npu;
+
+	/* Return an error if the context is already setup */
+	if (mm->context.npu[npu->index])
+		return ERR_PTR(-EEXIST);
 
 	/* Setup the NPU context tables */
-	id = opal_npu_init_context(phb->opal_id, mm->context.id, flags, lpid);
+	id = opal_npu_init_context(nphb->opal_id, mm->context.id, flags, lpid);
 	if (id < 0)
 		return ERR_PTR(-ENOSPC);
 
@@ -655,13 +651,13 @@ npu_context pnv_npu2_init_context(struct pci_dev *pdev, unsigned long flags)
 	 * keep one copy for use by the kernel so we need to increment
 	 * the refcount. */
 	kref_get(&npu_context->refcount);
-	mm->context.npu = npu_context;
+	mm->context.npu[npu->index] = npu_context;
 
 	return npu_context;
 }
 EXPORT_SYMBOL(pnv_npu2_init_context);
 
-int pnv_npu2_destroy_context(struct pci_dev *pdev, npu_context context)
+int pnv_npu2_destroy_context(npu_context context)
 {
 	kref_put(&context->refcount, destroy_npu_context);
        	return 0;
@@ -688,8 +684,7 @@ int pnv_npu2_handle_fault(npu_context context, uintptr_t *ea, unsigned long *dsi
 	might_fault();
 
 	for (i = 0; i < count; i++) {
-		if (ea[i] == CONFIG_KERNEL_START) {
-			WARN_ON(1);
+		if (WARN_ON(ea[i] == CONFIG_KERNEL_START)) {
 			rc = -EINVAL;
 			goto out_unuse;
 		}
@@ -737,15 +732,7 @@ int pnv_npu2_init(struct pnv_phb *phb)
 {
 	unsigned int i;
 	u64 mmio_atsd;
-
-	/* TODO: Probably need a better way to track NPUs */
-	if (npu_count == 0) {
-		spin_lock_init(&context_list_lock);
-		INIT_LIST_HEAD(&context_list);
-	} else if (npu_count >= NV_MAX_NPUS)
-		return -ENOMEM;
-
-	npus[npu_count++] = &phb->npu;
+	static int npu_index = 0;
 
 	/* For the moment map bogus bdfn's
 	 * TODO: Find associated device bdfn's and add them here */
@@ -758,6 +745,7 @@ int pnv_npu2_init(struct pnv_phb *phb)
 	pr_info("NPU%lld: Found %d MMIO ATSD registers", phb->opal_id, i);
 	phb->npu.mmio_atsd_count = i;
 	phb->npu.mmio_atsd_usage = 0;
+	phb->npu.index = npu_index++;
 
 	return 0;
 }

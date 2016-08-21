@@ -184,6 +184,7 @@ struct pnv_phb {
 
 	/* Nvlink2 data */
 	struct npu {
+		int index;
 		__be64 *mmio_atsd_regs[NV_NMMU_ATSD_REGS];
 		unsigned int mmio_atsd_count;
 
