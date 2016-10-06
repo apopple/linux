@@ -151,6 +151,23 @@ int of_fdt_match(const void *blob, unsigned long node,
 	return score;
 }
 
+bool of_fdt_device_is_available(const void *blob, unsigned long node)
+{
+	const char *status;
+	int statlen;
+
+	status = fdt_getprop(blob, node, "status", &statlen);
+	if (!status)
+		return true;
+
+	if (statlen) {
+		if (!strcmp(status, "okay") || !strcmp(status, "ok"))
+			return true;
+	}
+
+	return false;
+}
+
 static void *unflatten_dt_alloc(void **mem, unsigned long size,
 				       unsigned long align)
 {
@@ -647,7 +664,6 @@ static int __init __fdt_scan_reserved_mem(unsigned long node, const char *uname,
 					  int depth, void *data)
 {
 	static int found;
-	const char *status;
 	int err;
 
 	if (!found && depth == 1 && strcmp(uname, "reserved-memory") == 0) {
@@ -667,8 +683,7 @@ static int __init __fdt_scan_reserved_mem(unsigned long node, const char *uname,
 		return 1;
 	}
 
-	status = of_get_flat_dt_prop(node, "status", NULL);
-	if (status && strcmp(status, "okay") != 0 && strcmp(status, "ok") != 0)
+	if (!of_flat_dt_device_is_available(node))
 		return 0;
 
 	err = __reserved_mem_reserve_reg(node, uname);
@@ -807,6 +822,11 @@ int __init of_flat_dt_is_compatible(unsigned long node, const char *compat)
 int __init of_flat_dt_match(unsigned long node, const char *const *compat)
 {
 	return of_fdt_match(initial_boot_params, node, compat);
+}
+
+bool __init of_flat_dt_device_is_available(unsigned long node)
+{
+	return of_fdt_device_is_available(initial_boot_params, node);
 }
 
 struct fdt_scan_status {
