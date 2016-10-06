@@ -38,8 +38,6 @@
 #include "powernv.h"
 #include "pci.h"
 
-typedef struct npu_context * npu_context;
-
 /*
  * Other types of TCE cache invalidation are not functional in the
  * hardware.
@@ -673,7 +671,8 @@ EXPORT_SYMBOL(pnv_npu2_destroy_context);
 /*
  * Must be called from a kernel thread.
  */
-int pnv_npu2_handle_fault(npu_context context, uintptr_t *ea, unsigned long *dsisr, int count)
+int pnv_npu2_handle_fault(npu_context context, uintptr_t *ea,
+			unsigned long *flags, unsigned long *status, int count)
 {
 	u64 tmp, rc = 0;
 	int i;
@@ -681,6 +680,9 @@ int pnv_npu2_handle_fault(npu_context context, uintptr_t *ea, unsigned long *dsi
 	unsigned long is_write;
 
 	mm = mm_from_npu_context(context);
+	if (!mm)
+		return -ENOENT;
+
 	use_mm(mm);
 
 	/* mm_from_npu_context() above increments mm_count as does use_mm()
@@ -691,11 +693,11 @@ int pnv_npu2_handle_fault(npu_context context, uintptr_t *ea, unsigned long *dsi
 
 	for (i = 0; i < count; i++) {
 		if (WARN_ON(ea[i] == CONFIG_KERNEL_START)) {
-			rc = -EINVAL;
-			goto out_unuse;
+			status[i] = -EINVAL;
+			continue;
 		}
 
-		is_write = dsisr[i] & DSISR_ISSTORE;
+		is_write = flags[i] & NPU2_WRITE;
 		if (is_write)
 			/* To fault a writable page in we need to do a nop
 			 * write. We could just do a lwarx/stwcx however this
@@ -722,15 +724,15 @@ int pnv_npu2_handle_fault(npu_context context, uintptr_t *ea, unsigned long *dsi
 		else
 			rc = get_user(tmp, (u64 *) ea[i]);
 
-		if (rc)
-			/* Bail if we hit an error handling the fault */
-			break;
+		/* Some faults may only be prefetch faults so record
+		 * the status and continue processing remaining
+		 * faults. */
+		status[i] = rc;
 	}
 
-out_unuse:
 	unuse_mm(mm);
 
-	return rc;
+	return 0;
 }
 EXPORT_SYMBOL(pnv_npu2_handle_fault);
 

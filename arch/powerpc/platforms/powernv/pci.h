@@ -246,6 +246,8 @@ extern void pe_level_printk(const struct pnv_ioda_pe *pe, const char *level,
 	pe_level_printk(pe, KERN_INFO, fmt, ##__VA_ARGS__)
 
 /* Nvlink functions */
+#define NPU2_WRITE DSISR_ISSTORE
+typedef struct npu_context * npu_context;
 extern void pnv_npu_try_dma_set_bypass(struct pci_dev *gpdev, bool bypass);
 extern void pnv_pci_phb3_tce_invalidate_entire(struct pnv_phb *phb, bool rm);
 extern struct pnv_ioda_pe *pnv_pci_npu_setup_iommu(struct pnv_ioda_pe *npe);
@@ -254,8 +256,13 @@ extern long pnv_npu_set_window(struct pnv_ioda_pe *npe, int num,
 extern long pnv_npu_unset_window(struct pnv_ioda_pe *npe, int num);
 extern void pnv_npu_take_ownership(struct pnv_ioda_pe *npe);
 extern void pnv_npu_release_ownership(struct pnv_ioda_pe *npe);
+extern npu_context pnv_npu2_init_context(struct pci_dev *gpdev,
+					unsigned long flags);
+extern int pnv_npu2_destroy_context(npu_context context);
+extern int pnv_npu2_handle_fault(npu_context context, uintptr_t *ea,
+				unsigned long *flags, unsigned long *status,
+				int count);
 extern int pnv_npu2_init(struct pnv_phb *phb);
-
 
 /* cxl functions */
 extern bool pnv_cxl_enable_device_hook(struct pci_dev *dev);
