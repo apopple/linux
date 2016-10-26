@@ -1792,8 +1792,12 @@ static void pnv_ioda_setup_bus_dma(struct pnv_ioda_pe *pe,
 static inline __be64 __iomem *pnv_ioda_get_inval_reg(struct pnv_phb *phb,
 						     bool real_mode)
 {
-	return real_mode ? (__be64 __iomem *)(phb->regs_phys + 0x210) :
-		(phb->regs + 0x210);
+	if (phb->type == PNV_PHB_NPU)
+		return real_mode ? (__be64 __iomem *)(phb->regs_phys + 0x700120) :
+			(phb->regs + 0x700120);
+	else
+		return real_mode ? (__be64 __iomem *)(phb->regs_phys + 0x210) :
+			(phb->regs + 0x210);
 }
 
 static void pnv_pci_p7ioc_tce_invalidate(struct iommu_table *tbl,
