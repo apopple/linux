@@ -12,6 +12,7 @@
 #include <linux/memblock.h>
 #include <linux/of_fdt.h>
 
+#include <asm/opal.h>
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/dma.h>
@@ -177,7 +178,7 @@ redo:
 
 static void __init radix_init_partition_table(void)
 {
-	unsigned long rts_field;
+	unsigned long ptcr, rts_field;
 
 	rts_field = radix__get_tree_size();
 
@@ -193,7 +194,9 @@ static void __init radix_init_partition_table(void)
 	 * update partition table control register,
 	 * 64 K size.
 	 */
-	mtspr(SPRN_PTCR, __pa(partition_tb) | (PATB_SIZE_SHIFT - 12));
+	ptcr = __pa(partition_tb) | (PATB_SIZE_SHIFT - 12);
+	mtspr(SPRN_PTCR, ptcr);
+	powernv_set_ptcr(ptcr);
 }
 
 void __init radix_init_native(void)
@@ -408,6 +411,7 @@ void radix__mmu_cleanup_all(void)
 		lpcr = mfspr(SPRN_LPCR);
 		mtspr(SPRN_LPCR, lpcr & ~LPCR_UPRT);
 		mtspr(SPRN_PTCR, 0);
+		powernv_set_ptcr(0);
 		radix__flush_tlb_all();
 	}
 }
