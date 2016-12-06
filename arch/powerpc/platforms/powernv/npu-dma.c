@@ -649,7 +649,7 @@ npu_context pnv_npu2_init_context(struct pci_dev *gpdev, unsigned long flags)
 	npu_context->mn.ops = &nv_nmmu_notifier_ops;
 	npu_context->npu = npu;
 	npu_context->mm = mm;
-	mmu_notifier_register(&npu_context->mn, mm);
+	__mmu_notifier_register(&npu_context->mn, mm);
 
 	/* We pass a copy of the pointer out (as a npu_context) and
 	 * keep one copy for use by the kernel so we need to increment
