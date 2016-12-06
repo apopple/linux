@@ -13,7 +13,7 @@
 /* We have 8k stacks on ppc32 and 16k on ppc64 */
 
 #if defined(CONFIG_PPC64)
-#define THREAD_SHIFT		14
+#define THREAD_SHIFT		15
 #elif defined(CONFIG_PPC_256K_PAGES)
 #define THREAD_SHIFT		15
 #else
