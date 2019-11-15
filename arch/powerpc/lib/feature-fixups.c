@@ -440,7 +440,7 @@ void __init apply_feature_fixups(void)
 	do_feature_fixups(powerpc_firmware_features,
 			  &__start___fw_ftr_fixup, &__stop___fw_ftr_fixup);
 #endif
-	do_final_fixups();
+	//do_final_fixups();
 }
 
 void __init setup_feature_keys(void)
