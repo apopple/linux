@@ -904,7 +904,7 @@ void __init setup_arch(char **cmdline_p)
 	/* On BookE, setup per-core TLB data structures. */
 	setup_tlb_core_data();
 
-	smp_release_cpus();
+	//smp_release_cpus();
 #endif
 
 	/* Print various info about the machine that has been gathered so far. */
