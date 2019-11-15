@@ -466,6 +466,8 @@ static int __init radix_dt_scan_page_sizes(unsigned long node,
 	prop = of_get_flat_dt_prop(node, "ibm,mmu-pid-bits", &size);
 	if (prop && size == 4)
 		mmu_pid_bits = be32_to_cpup(prop);
+	else
+		mmu_pid_bits = 8;
 
 	/* Grab page size encodings */
 	prop = of_get_flat_dt_prop(node, "ibm,processor-radix-AP-encodings", &size);
