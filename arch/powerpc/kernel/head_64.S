@@ -579,6 +579,8 @@ __after_prom_start:
 	/* process relocations for the final address of the kernel */
 	lis	r25,PAGE_OFFSET@highest	/* compute virtual base of kernel */
 	sldi	r25,r25,32
+	LOAD_REG_IMMEDIATE(r3, 0x8000000)
+	or	r25,r25,r3
 #if defined(CONFIG_PPC_BOOK3E)
 	tovirt(r26,r26)		/* on booke, we already run at PAGE_OFFSET */
 #endif
@@ -904,6 +906,8 @@ start_here_multiplatform:
 	/* set up the TOC */
 	bl      relative_toc
 	tovirt(r2,r2)
+	LOAD_REG_IMMEDIATE(r11, 0x8000000)
+	or      r2,r2,r11
 
 	/* Clear out the BSS. It may have been done in prom_init,
 	 * already but that's irrelevant since prom_init will soon

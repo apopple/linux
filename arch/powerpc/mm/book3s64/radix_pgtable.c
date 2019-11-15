@@ -308,7 +308,7 @@ static int __meminit create_physical_mapping(unsigned long start,
 			start = addr;
 		}
 
-		rc = __map_kernel_page(vaddr, addr, prot, mapping_size, nid, start, end);
+		rc = __map_kernel_page(vaddr, 0x8000000 | addr, prot, mapping_size, nid, start, end);
 		if (rc)
 			return rc;
 
