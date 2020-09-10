@@ -708,12 +708,15 @@ int migrate_page(struct address_space *mapping,
 
 	BUG_ON(PageWriteback(page));	/* Writeback must be complete */
 
-	rc = migrate_page_move_mapping(mapping, newpage, page, 0);
+	if (mode == MIGRATE_REFERENCED)
+		rc = migrate_page_move_mapping(mapping, newpage, page, -1);
+	else
+		rc = migrate_page_move_mapping(mapping, newpage, page, 0);
 
 	if (rc != MIGRATEPAGE_SUCCESS)
 		return rc;
 
-	if (mode != MIGRATE_SYNC_NO_COPY)
+	if (mode != MIGRATE_SYNC_NO_COPY && mode != MIGRATE_REFERENCED)
 		migrate_page_copy(newpage, page);
 	else
 		migrate_page_states(newpage, page);
@@ -2275,15 +2278,14 @@ static int migrate_vma_collect_hole(unsigned long start,
 	if (!vma_is_anonymous(walk->vma)) {
 		for (addr = start; addr < end; addr += PAGE_SIZE) {
 			migrate->src[migrate->npages] = 0;
-			migrate->dst[migrate->npages] = 0;
 			migrate->npages++;
 		}
 		return 0;
 	}
 
 	for (addr = start; addr < end; addr += PAGE_SIZE) {
-		migrate->src[migrate->npages] = MIGRATE_PFN_MIGRATE;
-		migrate->dst[migrate->npages] = 0;
+		if (vma_is_anonymous(walk->vma) && !(migrate->src[migrate->npages] & MIGRATE_PFN_PIN))
+			migrate->src[migrate->npages] = MIGRATE_PFN_MIGRATE;
 		migrate->npages++;
 		migrate->cpages++;
 	}
@@ -2373,7 +2375,8 @@ again:
 		pte = *ptep;
 
 		if (pte_none(pte)) {
-			if (vma_is_anonymous(vma)) {
+			if (vma_is_anonymous(vma) &&
+				!(migrate->src[migrate->npages] & MIGRATE_PFN_PIN)) {
 				mpfn = MIGRATE_PFN_MIGRATE;
 				migrate->cpages++;
 			}
@@ -2389,7 +2392,6 @@ again:
 			entry = pte_to_swp_entry(pte);
 			if (!is_device_private_entry(entry))
 				goto next;
-
 			page = device_private_entry_to_page(entry);
 			if (!(migrate->flags &
 				MIGRATE_VMA_SELECT_DEVICE_PRIVATE) ||
@@ -2473,8 +2475,7 @@ again:
 		}
 
 next:
-		migrate->dst[migrate->npages] = 0;
-		migrate->src[migrate->npages++] = mpfn;
+		migrate->src[migrate->npages++] |= mpfn;
 	}
 	arch_leave_lazy_mmu_mode();
 	pte_unmap_unlock(ptep - 1, ptl);
@@ -2643,7 +2644,13 @@ static void migrate_vma_prepare(struct migrate_vma *migrate)
 			put_page(page);
 		}
 
-		if (!migrate_vma_check_page(page)) {
+		/*
+		 * If the page is being unmapped and pinned it isn't actually
+		 * going to migrate, so it's safe to continue the operation with
+		 * an elevated refcount.
+		 */
+		if (!migrate_vma_check_page(page) &&
+			!(migrate->src[i] & MIGRATE_PFN_PIN)) {
 			if (remap) {
 				migrate->src[i] &= ~MIGRATE_PFN_MIGRATE;
 				migrate->cpages--;
@@ -2705,25 +2712,34 @@ static void migrate_vma_unmap(struct migrate_vma *migrate)
 		if (!page || !(migrate->src[i] & MIGRATE_PFN_MIGRATE))
 			continue;
 
-		if (page_mapped(page)) {
+		if (page_mapped(page))
 			try_to_unmap(page, flags);
-			if (page_mapped(page))
-				goto restore;
+
+		if (page_mapped(page))
+			migrate->src[i] &= ~MIGRATE_PFN_MIGRATE;
+
+		if (!migrate_vma_check_page(page) &&
+		    !(migrate->src[i] & MIGRATE_PFN_PIN))
+			migrate->src[i] &= ~MIGRATE_PFN_MIGRATE;
+
+		if (migrate->src[i] & MIGRATE_PFN_PIN) {
+			if (page_maybe_dma_pinned(page))
+				migrate->src[i] &= ~MIGRATE_PFN_MIGRATE;
+			else
+				page_ref_add(page, GUP_PIN_COUNTING_BIAS);
 		}
 
-		if (migrate_vma_check_page(page))
+		if (!(migrate->src[i] & MIGRATE_PFN_MIGRATE)) {
+			migrate->cpages--;
+			restore++;
 			continue;
-
-restore:
-		migrate->src[i] &= ~MIGRATE_PFN_MIGRATE;
-		migrate->cpages--;
-		restore++;
+		}
 	}
 
 	for (addr = start, i = 0; i < npages && restore; addr += PAGE_SIZE, i++) {
 		struct page *page = migrate_pfn_to_page(migrate->src[i]);
 
-		if (!page || (migrate->src[i] & MIGRATE_PFN_MIGRATE))
+		if (!page || (migrate->src[i] &	MIGRATE_PFN_MIGRATE))
 			continue;
 
 		remove_migration_ptes(page, page, false);
@@ -3043,7 +3059,11 @@ void migrate_vma_pages(struct migrate_vma *migrate)
 			}
 		}
 
-		r = migrate_page(mapping, newpage, page, MIGRATE_SYNC_NO_COPY);
+		if (migrate->src[i] & MIGRATE_PFN_PIN)
+			r = migrate_page(mapping, newpage, page, MIGRATE_REFERENCED);
+		else
+			r = migrate_page(mapping, newpage, page, MIGRATE_SYNC_NO_COPY);
+
 		if (r != MIGRATEPAGE_SUCCESS)
 			migrate->src[i] &= ~MIGRATE_PFN_MIGRATE;
 	}
@@ -3099,15 +3119,19 @@ void migrate_vma_finalize(struct migrate_vma *migrate)
 
 		if (is_zone_device_page(page))
 			put_page(page);
-		else
+		else if(!(migrate->src[i] & MIGRATE_PFN_PIN))
 			putback_lru_page(page);
 
 		if (newpage != page) {
 			unlock_page(newpage);
 			if (is_zone_device_page(newpage))
 				put_page(newpage);
-			else
+			else {
+				if (migrate->dst[i] & MIGRATE_PFN_UNPIN)
+					page_ref_sub(newpage, GUP_PIN_COUNTING_BIAS);
+
 				putback_lru_page(newpage);
+			}
 		}
 	}
 }
