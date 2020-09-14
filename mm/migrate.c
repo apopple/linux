@@ -412,7 +412,8 @@ int migrate_page_move_mapping(struct address_space *mapping,
 		 * never have extra references except during migration, but it
 		 * is safe to ignore these (see the comment in
 		 * migrate_vma_check_page).*/
-		if (!is_device_private_page(page) && page_count(page) != expected_count)
+		if (!is_device_private_page(page) && extra_count >= 0 &&
+		    page_count(page) != expected_count)
 			return -EAGAIN;
 
 		/* No turning back from here */
@@ -422,6 +423,8 @@ int migrate_page_move_mapping(struct address_space *mapping,
 			__SetPageSwapBacked(newpage);
 
 		return MIGRATEPAGE_SUCCESS;
+	} else if (extra_count < 0) {
+		return -EINVAL;
 	}
 
 	oldzone = page_zone(page);
