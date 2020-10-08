@@ -69,6 +69,7 @@ struct nouveau_dmem_chunk {
 	unsigned long callocated;
 	enum nouveau_dmem_type type;
 	struct dev_pagemap pagemap;
+	struct page **atomic_pages;
 };
 
 struct nouveau_dmem_migrate {
@@ -136,6 +137,91 @@ static void nouveau_dmem_fence_done(struct nouveau_fence **fence)
 		 * the hmem object.
 		 */
 	}
+}
+
+static struct page *nouveau_dpage_to_atomic(struct page *dpage)
+{
+	struct nouveau_dmem_chunk *chunk = nouveau_page_to_chunk(dpage);
+	int index;
+
+	if (WARN_ON(chunk->type != NOUVEAU_ATOMIC))
+		return NULL;
+
+	index = page_to_pfn(dpage) - (chunk->pagemap.range.start >> PAGE_SHIFT);
+
+	if (WARN_ON(index > DMEM_CHUNK_NPAGES))
+		return NULL;
+
+	return chunk->atomic_pages[index];
+}
+
+void nouveau_dmem_set_atomic(struct page *dpage, struct page *atomic_page)
+{
+	struct nouveau_dmem_chunk *chunk = nouveau_page_to_chunk(dpage);
+	int index;
+
+	if (WARN_ON(chunk->type != NOUVEAU_ATOMIC))
+		return;
+
+	index = page_to_pfn(dpage) - (chunk->pagemap.range.start >> PAGE_SHIFT);
+
+	if (WARN_ON(index > DMEM_CHUNK_NPAGES))
+		return;
+
+	chunk->atomic_pages[index] = atomic_page;
+}
+
+static vm_fault_t nouveau_atomic_page_migrate(struct vm_fault *vmf)
+{
+	struct nouveau_drm *drm = page_to_drm(vmf->page);
+	struct page *dpage = vmf->page;
+	struct nouveau_svmm *svmm = dpage->zone_device_data;
+	struct migrate_vma args;
+	unsigned long src_pfn = 0, dst_pfn = 0;
+	struct page *src_page, *old_page;
+	int retry = 1000;
+	int ret = 0;
+
+	args.vma = vmf->vma;
+	args.src = &src_pfn;
+	args.dst = &dst_pfn;
+	args.start = vmf->address;
+	args.end = vmf->address + PAGE_SIZE;
+	args.pgmap_owner = drm->dev;
+
+
+	/* Select both because sometimes a racing CPU thread beats us and it's
+	 * more efficient to detect that and bail rather than retry then bail.
+	 */
+	args.flags = MIGRATE_VMA_SELECT_DEVICE_PRIVATE | MIGRATE_VMA_SELECT_SYSTEM;
+
+	while (!(src_pfn & MIGRATE_PFN_MIGRATE) && --retry) {
+		ret = migrate_vma_setup(&args);
+		if (ret) {
+			ret = VM_FAULT_SIGBUS;
+			goto out;
+		}
+	}
+
+	src_page = migrate_pfn_to_page(src_pfn);
+	old_page = nouveau_dpage_to_atomic(dpage);
+
+	/* A concurrent fault can race with us here. If we can't grab a lock on
+	 * the atomic page it means another thread is currently trying to
+	 * migrate it to/from it so retry the fault.
+	 */
+	if (src_page && is_device_private_page(src_page) && trylock_page(old_page))
+		dst_pfn = migrate_pfn(page_to_pfn(old_page)) |
+					MIGRATE_PFN_LOCKED | MIGRATE_PFN_UNPIN;
+	else
+		ret = VM_FAULT_RETRY;
+
+	migrate_vma_pages(&args);
+	nouveau_svmm_invalidate(svmm, args.start, args.end);
+	migrate_vma_finalize(&args);
+
+out:
+	return ret;
 }
 
 static vm_fault_t nouveau_dmem_fault_copy_one(struct nouveau_drm *drm,
@@ -224,6 +310,11 @@ static const struct dev_pagemap_ops nouveau_dmem_pagemap_ops = {
 	.migrate_to_ram		= nouveau_dmem_migrate_to_ram,
 };
 
+static const struct dev_pagemap_ops nouveau_atomic_pagemap_ops = {
+	.page_free = nouveau_dmem_page_free,
+	.migrate_to_ram = nouveau_atomic_page_migrate,
+};
+
 static int
 nouveau_dmem_chunk_alloc(struct nouveau_drm *drm, struct page **ppage,
 	enum nouveau_dmem_type type)
@@ -255,18 +346,30 @@ nouveau_dmem_chunk_alloc(struct nouveau_drm *drm, struct page **ppage,
 	chunk->pagemap.range.start = res->start;
 	chunk->pagemap.range.end = res->end;
 	chunk->pagemap.nr_range = 1;
-	chunk->pagemap.ops = &nouveau_dmem_pagemap_ops;
+	if (type == NOUVEAU_DMEM)
+		chunk->pagemap.ops = &nouveau_dmem_pagemap_ops;
+	else
+		chunk->pagemap.ops = &nouveau_atomic_pagemap_ops;
 	chunk->pagemap.owner = drm->dev;
 
-	ret = nouveau_bo_new(&drm->client, DMEM_CHUNK_SIZE, 0,
-			     NOUVEAU_GEM_DOMAIN_VRAM, 0, 0, NULL, NULL,
-			     &chunk->bo);
-	if (ret)
-		goto out_release;
+	if (type == NOUVEAU_DMEM) {
+		ret = nouveau_bo_new(&drm->client, DMEM_CHUNK_SIZE, 0,
+				NOUVEAU_GEM_DOMAIN_VRAM, 0, 0, NULL, NULL,
+				&chunk->bo);
+		if (ret)
+			goto out_release;
 
-	ret = nouveau_bo_pin(chunk->bo, NOUVEAU_GEM_DOMAIN_VRAM, false);
-	if (ret)
-		goto out_bo_free;
+		ret = nouveau_bo_pin(chunk->bo, NOUVEAU_GEM_DOMAIN_VRAM, false);
+		if (ret)
+			goto out_bo_free;
+	} else {
+		chunk->atomic_pages = kmalloc_array(DMEM_CHUNK_NPAGES,
+						sizeof(void *), GFP_KERNEL);
+		if (!chunk->atomic_pages) {
+			ret = -ENOMEM;
+			goto out_release;
+		}
+	}
 
 	ptr = memremap_pages(&chunk->pagemap, numa_node_id());
 	if (IS_ERR(ptr)) {
@@ -289,8 +392,8 @@ nouveau_dmem_chunk_alloc(struct nouveau_drm *drm, struct page **ppage,
 	chunk->callocated++;
 	spin_unlock(&drm->dmem->lock);
 
-	NV_INFO(drm, "DMEM: registered %ldMB of device memory\n",
-		DMEM_CHUNK_SIZE >> 20);
+	NV_INFO(drm, "DMEM: registered %ldMB of device %smemory\n",
+		DMEM_CHUNK_SIZE >> 20, type == NOUVEAU_ATOMIC ? "atomic " : "");
 
 	return 0;
 
@@ -306,7 +409,7 @@ out:
 	return ret;
 }
 
-static struct page *
+struct page *
 nouveau_dmem_page_alloc_locked(struct nouveau_drm *drm, enum nouveau_dmem_type type)
 {
 	struct nouveau_dmem_chunk *chunk;
@@ -382,8 +485,12 @@ nouveau_dmem_fini(struct nouveau_drm *drm)
 	mutex_lock(&drm->dmem->mutex);
 
 	list_for_each_entry_safe(chunk, tmp, &drm->dmem->chunks, list) {
-		nouveau_bo_unpin(chunk->bo);
-		nouveau_bo_ref(NULL, &chunk->bo);
+		if (chunk->type == NOUVEAU_DMEM) {
+			nouveau_bo_unpin(chunk->bo);
+			nouveau_bo_ref(NULL, &chunk->bo);
+		} else {
+			kfree(chunk->atomic_pages);
+		}
 		list_del(&chunk->list);
 		memunmap_pages(&chunk->pagemap);
 		release_mem_region(chunk->pagemap.range.start,

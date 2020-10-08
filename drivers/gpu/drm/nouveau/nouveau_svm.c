@@ -35,6 +35,7 @@
 #include <linux/sched/mm.h>
 #include <linux/sort.h>
 #include <linux/hmm.h>
+#include <linux/idr.h>
 
 struct nouveau_svm {
 	struct nouveau_drm *drm;
@@ -417,9 +418,9 @@ nouveau_svm_fault_cmp(const void *a, const void *b)
 		return ret;
 	if ((ret = (s64)fa->addr - fb->addr))
 		return ret;
-	/*XXX: atomic? */
-	return (fa->access == 0 || fa->access == 3) -
-	       (fb->access == 0 || fb->access == 3);
+	/* Atomic access (2) has highest priority */
+	return (-1*(fa->access == 2) + (fa->access == 0 || fa->access == 3)) -
+	       (-1*(fb->access == 2) + (fb->access == 0 || fb->access == 3));
 }
 
 static void
@@ -551,10 +552,86 @@ static void nouveau_hmm_convert_pfn(struct nouveau_drm *drm,
 		args->p.phys[0] |= NVIF_VMM_PFNMAP_V0_W;
 }
 
+static int nouveau_atomic_range_fault(struct nouveau_svmm *svmm,
+			       struct nouveau_drm *drm,
+			       struct nouveau_pfnmap_args *args, u32 size,
+			       unsigned long hmm_flags, struct mm_struct *mm)
+{
+	struct page *dpage, *oldpage;
+	struct migrate_vma migrate_args;
+	unsigned long src_pfn = MIGRATE_PFN_PIN, dst_pfn = 0, start = args->p.addr;
+	int ret = 0;
+
+	mmap_read_lock(mm);
+
+	migrate_args.src = &src_pfn;
+	migrate_args.dst = &dst_pfn;
+	migrate_args.start = start;
+	migrate_args.end = migrate_args.start + PAGE_SIZE;
+	migrate_args.pgmap_owner = NULL;
+	migrate_args.flags = MIGRATE_VMA_SELECT_SYSTEM;
+	migrate_args.vma = find_vma_intersection(mm, migrate_args.start, migrate_args.end);
+
+	ret = migrate_vma_setup(&migrate_args);
+
+	if (ret) {
+		SVMM_ERR(svmm, "Unable to setup atomic page migration");
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	oldpage = migrate_pfn_to_page(src_pfn);
+
+	if (src_pfn & MIGRATE_PFN_MIGRATE) {
+		dpage = nouveau_dmem_page_alloc_locked(drm, NOUVEAU_ATOMIC);
+		if (!dpage) {
+			SVMM_ERR(svmm, "Unable to allocate atomic page");
+			*migrate_args.dst = 0;
+		} else {
+			nouveau_dmem_set_atomic(dpage, oldpage);
+			dpage->zone_device_data = svmm;
+			*migrate_args.dst = migrate_pfn(page_to_pfn(dpage)) |
+						MIGRATE_PFN_LOCKED;
+		}
+	}
+
+	migrate_vma_pages(&migrate_args);
+
+	/* Map the page on the GPU for successfully migrated mappings. Do this
+	 * before removing the migration PTEs in migrate_vma_finalize() as once
+	 * that happens a CPU thread can race and invalidate the GPU mappings
+	 * prior to mapping them here.
+	 */
+	if (src_pfn & MIGRATE_PFN_MIGRATE) {
+		args->p.page = 12;
+		args->p.size = PAGE_SIZE;
+		args->p.addr = start;
+		args->p.phys[0] = page_to_phys(oldpage) |
+				NVIF_VMM_PFNMAP_V0_V |
+				NVIF_VMM_PFNMAP_V0_A |
+				NVIF_VMM_PFNMAP_V0_HOST;
+
+		if (migrate_args.vma->vm_flags & VM_WRITE)
+			args->p.phys[0] |= NVIF_VMM_PFNMAP_V0_W;
+
+		mutex_lock(&svmm->mutex);
+		svmm->vmm->vmm.object.client->super = true;
+		ret = nvif_object_ioctl(&svmm->vmm->vmm.object, args, size, NULL);
+		svmm->vmm->vmm.object.client->super = false;
+		mutex_unlock(&svmm->mutex);
+	}
+
+	migrate_vma_finalize(&migrate_args);
+
+out:
+	mmap_read_unlock(mm);
+	return ret;
+}
+
 static int nouveau_range_fault(struct nouveau_svmm *svmm,
 			       struct nouveau_drm *drm,
 			       struct nouveau_pfnmap_args *args, u32 size,
-			       unsigned long hmm_flags,
+			       unsigned long hmm_flags, int atomic,
 			       struct svm_notifier *notifier)
 {
 	unsigned long timeout =
@@ -604,12 +681,18 @@ static int nouveau_range_fault(struct nouveau_svmm *svmm,
 		break;
 	}
 
-	nouveau_hmm_convert_pfn(drm, &range, args);
+	if (atomic) {
+		mutex_unlock(&svmm->mutex);
+		ret = nouveau_atomic_range_fault(svmm, drm, args,
+						size, hmm_flags, mm);
+	} else {
+		nouveau_hmm_convert_pfn(drm, &range, args);
 
-	svmm->vmm->vmm.object.client->super = true;
-	ret = nvif_object_ioctl(&svmm->vmm->vmm.object, args, size, NULL);
-	svmm->vmm->vmm.object.client->super = false;
-	mutex_unlock(&svmm->mutex);
+		svmm->vmm->vmm.object.client->super = true;
+		ret = nvif_object_ioctl(&svmm->vmm->vmm.object, args, size, NULL);
+		svmm->vmm->vmm.object.client->super = false;
+		mutex_unlock(&svmm->mutex);
+	}
 
 out:
 	mmu_interval_notifier_remove(&notifier->notifier);
@@ -633,7 +716,7 @@ nouveau_svm_fault(struct nvif_notify *notify)
 	unsigned long hmm_flags;
 	u64 inst, start, limit;
 	int fi, fn;
-	int replay = 0, ret;
+	int replay = 0, atomic = 0, ret;
 
 	/* Parse available fault buffer entries into a cache, and update
 	 * the GET pointer so HW can reuse the entries.
@@ -714,11 +797,14 @@ nouveau_svm_fault(struct nvif_notify *notify)
 		/*
 		 * Determine required permissions based on GPU fault
 		 * access flags.
-		 * XXX: atomic?
 		 */
 		switch (buffer->fault[fi]->access) {
 		case 0: /* READ. */
 			hmm_flags = HMM_PFN_REQ_FAULT;
+			break;
+		case 2: /* ATOMIC. */
+			hmm_flags = HMM_PFN_REQ_FAULT | HMM_PFN_REQ_WRITE;
+			atomic = true;
 			break;
 		case 3: /* PREFETCH. */
 			hmm_flags = 0;
@@ -736,7 +822,7 @@ nouveau_svm_fault(struct nvif_notify *notify)
 
 		notifier.svmm = svmm;
 		ret = nouveau_range_fault(svmm, svm->drm, &args.i,
-					sizeof(args), hmm_flags, &notifier);
+			sizeof(args), hmm_flags, atomic, &notifier);
 		mmput(mm);
 
 		limit = args.i.p.addr + args.i.p.size;
@@ -756,7 +842,11 @@ nouveau_svm_fault(struct nvif_notify *notify)
 			     !(args.phys[0] & NVIF_VMM_PFNMAP_V0_V)) ||
 			    (buffer->fault[fi]->access != 0 /* READ. */ &&
 			     buffer->fault[fi]->access != 3 /* PREFETCH. */ &&
-			     !(args.phys[0] & NVIF_VMM_PFNMAP_V0_W)))
+			     !(args.phys[0] & NVIF_VMM_PFNMAP_V0_W)) ||
+			    (buffer->fault[fi]->access != 0 /* READ. */ &&
+			     buffer->fault[fi]->access != 1 /* WRITE. */ &&
+			     buffer->fault[fi]->access != 3 /* PREFETCH. */ &&
+			     !(args.phys[0] & NVIF_VMM_PFNMAP_V0_A)))
 				break;
 		}
 

@@ -30,6 +30,7 @@ struct hmm_range;
 
 enum nouveau_dmem_type {
 	NOUVEAU_DMEM,
+	NOUVEAU_ATOMIC,
 	NOUVEAU_DMEM_NTYPES, /* Number of types, must be last */
 };
 
@@ -45,6 +46,9 @@ int nouveau_dmem_migrate_vma(struct nouveau_drm *drm,
 			     unsigned long start,
 			     unsigned long end);
 unsigned long nouveau_dmem_page_addr(struct page *page);
+struct page *nouveau_dmem_page_alloc_locked(struct nouveau_drm *drm,
+					enum nouveau_dmem_type type);
+void nouveau_dmem_set_atomic(struct page *dpage, struct page *atomic_page);
 
 #else /* IS_ENABLED(CONFIG_DRM_NOUVEAU_SVM) */
 static inline void nouveau_dmem_init(struct nouveau_drm *drm) {}
