@@ -408,8 +408,11 @@ int migrate_page_move_mapping(struct address_space *mapping,
 	int expected_count = expected_page_refs(mapping, page) + extra_count;
 
 	if (!mapping) {
-		/* Anonymous page without mapping */
-		if (page_count(page) != expected_count)
+		/* Anonymous page without mapping. Device private pages should
+		 * never have extra references except during migration, but it
+		 * is safe to ignore these (see the comment in
+		 * migrate_vma_check_page).*/
+		if (!is_device_private_page(page) && page_count(page) != expected_count)
 			return -EAGAIN;
 
 		/* No turning back from here */
