@@ -1166,6 +1166,15 @@ static inline void get_page(struct page *page)
 
 bool __must_check try_grab_page(struct page *page, unsigned int flags);
 
+static inline __must_check bool try_get_devmap_managed_page(struct page *page)
+{
+	VM_BUG_ON_PAGE(page_ref_zero_or_close_to_overflow(page), page);
+	if (WARN_ON_ONCE(!page_is_devmap_managed(page)))
+		return false;
+
+	return page_ref_add_unless(page, 1, 1);
+}
+
 static inline __must_check bool try_get_page(struct page *page)
 {
 	page = compound_head(page);
