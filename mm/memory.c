@@ -3259,7 +3259,16 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 					     vmf->address);
 		} else if (is_device_private_entry(entry)) {
 			vmf->page = device_private_entry_to_page(entry);
-			ret = vmf->page->pgmap->ops->migrate_to_ram(vmf);
+			/* Get a reference on the page so that migrate_to_ram()
+			 * can safely use the page without another thread
+			 * freeing it and any associated zone_device_data. If we
+			 * can't get a reference the page must already have been
+			 * freed and the swap entry removed so it's safe to
+			 * retry the fault. */
+			if (try_get_devmap_managed_page(vmf->page)) {
+				ret = vmf->page->pgmap->ops->migrate_to_ram(vmf);
+				put_page(vmf->page);
+			}
 		} else if (is_hwpoison_entry(entry)) {
 			ret = VM_FAULT_HWPOISON;
 		} else {
