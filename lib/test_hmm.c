@@ -46,6 +46,7 @@ struct dmirror_bounce {
 	unsigned long		cpages;
 };
 
+#define DPT_XA_TAG_ATOMIC 1UL
 #define DPT_XA_TAG_WRITE 3UL
 
 /*
@@ -83,6 +84,7 @@ struct dmirror_device {
 	struct cdev		cdevice;
 	struct hmm_devmem	*devmem;
 
+	unsigned int		devmem_faults;
 	unsigned int		devmem_capacity;
 	unsigned int		devmem_count;
 	struct dmirror_chunk	**devmem_chunks;
@@ -203,8 +205,18 @@ static void dmirror_do_update(struct dmirror *dmirror, unsigned long start,
 	 * Therefore, it is OK to just clear the entry.
 	 */
 	xa_for_each_range(&dmirror->pt, pfn, entry, start >> PAGE_SHIFT,
-			  end >> PAGE_SHIFT)
+			  end >> PAGE_SHIFT) {
+		/*
+		 * Typically this would be done in devmap free page, but as
+		 * we're using the XArray to store the reference to the orignal
+		 * page do it here as it doesn't matter if clean up of the
+		 * pinned page is delayed.
+		 */
+		if (xa_pointer_tag(entry) == DPT_XA_TAG_ATOMIC)
+			unpin_user_page(xa_untag_pointer(entry));
+
 		xa_erase(&dmirror->pt, pfn);
+	}
 }
 
 static bool dmirror_interval_invalidate(struct mmu_interval_notifier *mni,
@@ -571,7 +583,8 @@ error:
 }
 
 static void dmirror_migrate_alloc_and_copy(struct migrate_vma *args,
-					   struct dmirror *dmirror)
+					   struct dmirror *dmirror,
+					   int allow_ref)
 {
 	struct dmirror_device *mdevice = dmirror->mdevice;
 	const unsigned long *src = args->src;
@@ -598,9 +611,16 @@ static void dmirror_migrate_alloc_and_copy(struct migrate_vma *args,
 			continue;
 
 		rpage = dpage->zone_device_data;
-		if (spage)
+		if (spage && !(*src & MIGRATE_PFN_PIN))
 			copy_highpage(rpage, spage);
 		else
+			/* In the MIGRATE_PFN_PIN case we don't really
+			 * need rpage at all because the existing page is
+			 * staying in place and will be mapped. However we need
+			 * somewhere to store dmirror and that place is
+			 * rpage->zone_device_data so we keep it for
+			 * simplicity.
+			 */
 			clear_highpage(rpage);
 
 		/*
@@ -620,7 +640,8 @@ static void dmirror_migrate_alloc_and_copy(struct migrate_vma *args,
 }
 
 static int dmirror_migrate_finalize_and_map(struct migrate_vma *args,
-					    struct dmirror *dmirror)
+					    struct dmirror *dmirror,
+					    int allow_ref)
 {
 	unsigned long start = args->start;
 	unsigned long end = args->end;
@@ -647,8 +668,14 @@ static int dmirror_migrate_finalize_and_map(struct migrate_vma *args,
 		 * Store the page that holds the data so the page table
 		 * doesn't have to deal with ZONE_DEVICE private pages.
 		 */
-		entry = dpage->zone_device_data;
-		if (*dst & MIGRATE_PFN_WRITE)
+		if (*src & MIGRATE_PFN_PIN)
+			entry = migrate_pfn_to_page(*src);
+		else
+			entry = dpage->zone_device_data;
+
+		if (*src & MIGRATE_PFN_PIN)
+			entry = xa_tag_pointer(entry, DPT_XA_TAG_ATOMIC);
+		else if (*dst & MIGRATE_PFN_WRITE)
 			entry = xa_tag_pointer(entry, DPT_XA_TAG_WRITE);
 		entry = xa_store(&dmirror->pt, pfn, entry, GFP_ATOMIC);
 		if (xa_is_err(entry)) {
@@ -662,7 +689,8 @@ static int dmirror_migrate_finalize_and_map(struct migrate_vma *args,
 }
 
 static int dmirror_migrate(struct dmirror *dmirror,
-			   struct hmm_dmirror_cmd *cmd)
+			   struct hmm_dmirror_cmd *cmd,
+			   int allow_ref)
 {
 	unsigned long start, end, addr;
 	unsigned long size = cmd->npages << PAGE_SHIFT;
@@ -673,7 +701,7 @@ static int dmirror_migrate(struct dmirror *dmirror,
 	struct dmirror_bounce bounce;
 	struct migrate_vma args;
 	unsigned long next;
-	int ret;
+	int i, ret;
 
 	start = cmd->addr;
 	end = start + size;
@@ -696,8 +724,13 @@ static int dmirror_migrate(struct dmirror *dmirror,
 		if (next > vma->vm_end)
 			next = vma->vm_end;
 
-		memset(src_pfns, 0, ARRAY_SIZE(src_pfns));
-		memset(dst_pfns, 0, ARRAY_SIZE(dst_pfns));
+		if (allow_ref)
+			for (i = 0; i< 64; ++i)
+				src_pfns[i] = MIGRATE_PFN_PIN;
+		else
+			memset(src_pfns, 0, sizeof(src_pfns));
+		memset(dst_pfns, 0, sizeof(dst_pfns));
+
 		args.vma = vma;
 		args.src = src_pfns;
 		args.dst = dst_pfns;
@@ -709,9 +742,9 @@ static int dmirror_migrate(struct dmirror *dmirror,
 		if (ret)
 			goto out;
 
-		dmirror_migrate_alloc_and_copy(&args, dmirror);
+		dmirror_migrate_alloc_and_copy(&args, dmirror, allow_ref);
 		migrate_vma_pages(&args);
-		dmirror_migrate_finalize_and_map(&args, dmirror);
+		dmirror_migrate_finalize_and_map(&args, dmirror, allow_ref);
 		migrate_vma_finalize(&args);
 	}
 	mmap_read_unlock(mm);
@@ -736,6 +769,28 @@ static int dmirror_migrate(struct dmirror *dmirror,
 out:
 	mmap_read_unlock(mm);
 	mmput(mm);
+	return ret;
+}
+
+static int dmirror_migrate_referenced(struct dmirror *dmirror,
+				      struct hmm_dmirror_cmd *cmd)
+{
+	void *tmp;
+	int nr_pages = cmd->npages;
+	int ret;
+
+	ret = dmirror_migrate(dmirror, cmd, true);
+
+	tmp = kmalloc(nr_pages << PAGE_SHIFT, GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	/* Make sure user access faults */
+	dmirror->mdevice->devmem_faults = 0;
+	if (copy_from_user(tmp, u64_to_user_ptr(cmd->addr), nr_pages << PAGE_SHIFT))
+		ret = -EFAULT;
+	cmd->faults = dmirror->mdevice->devmem_faults;
+
 	return ret;
 }
 
@@ -948,7 +1003,11 @@ static long dmirror_fops_unlocked_ioctl(struct file *filp,
 		break;
 
 	case HMM_DMIRROR_MIGRATE:
-		ret = dmirror_migrate(dmirror, &cmd);
+		ret = dmirror_migrate(dmirror, &cmd, false);
+		break;
+
+	case HMM_DMIRROR_MIGRATE_REF:
+		ret = dmirror_migrate_referenced(dmirror, &cmd);
 		break;
 
 	case HMM_DMIRROR_SNAPSHOT:
@@ -1004,20 +1063,30 @@ static vm_fault_t dmirror_devmem_fault_alloc_and_copy(struct migrate_vma *args,
 	for (addr = start; addr < end; addr += PAGE_SIZE,
 				       src++, dst++) {
 		struct page *dpage, *spage;
+		void *entry;
 
 		spage = migrate_pfn_to_page(*src);
 		if (!spage || !(*src & MIGRATE_PFN_MIGRATE))
 			continue;
-		spage = spage->zone_device_data;
 
-		dpage = alloc_page_vma(GFP_HIGHUSER_MOVABLE, args->vma, addr);
+		entry = xa_load(&dmirror->pt, addr >> PAGE_SHIFT);
+		if (entry && xa_pointer_tag(entry) == DPT_XA_TAG_ATOMIC) {
+			spage = NULL;
+			dpage = xa_untag_pointer(entry);
+			*dst = migrate_pfn(page_to_pfn(dpage)) | MIGRATE_PFN_LOCKED | MIGRATE_PFN_UNPIN;
+		} else {
+			spage = spage->zone_device_data;
+			dpage = alloc_page_vma(GFP_HIGHUSER_MOVABLE, args->vma, addr);
+			*dst = migrate_pfn(page_to_pfn(dpage)) | MIGRATE_PFN_LOCKED;
+		}
+
 		if (!dpage)
 			continue;
 
 		lock_page(dpage);
 		xa_erase(&dmirror->pt, addr >> PAGE_SHIFT);
-		copy_highpage(dpage, spage);
-		*dst = migrate_pfn(page_to_pfn(dpage)) | MIGRATE_PFN_LOCKED;
+		if (spage)
+			copy_highpage(dpage, spage);
 		if (*src & MIGRATE_PFN_WRITE)
 			*dst |= MIGRATE_PFN_WRITE;
 	}
@@ -1040,6 +1109,8 @@ static vm_fault_t dmirror_devmem_fault(struct vm_fault *vmf)
 	 */
 	rpage = vmf->page->zone_device_data;
 	dmirror = rpage->zone_device_data;
+
+	dmirror->mdevice->devmem_faults++;
 
 	/* FIXME demonstrate how we can adjust migrate range */
 	args.vma = vmf->vma;
