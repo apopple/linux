@@ -506,7 +506,7 @@ static int __kvmppc_svm_page_out(struct vm_area_struct *vma,
 		unsigned long end, unsigned long page_shift,
 		struct kvm *kvm, unsigned long gpa)
 {
-	unsigned long src_pfn, dst_pfn = 0;
+	unsigned long src_pfn = 0, dst_pfn = 0;
 	struct migrate_vma mig;
 	struct page *dpage, *spage;
 	struct kvmppc_uvmem_page_pvt *pvt;
@@ -732,7 +732,7 @@ static int kvmppc_svm_page_in(struct vm_area_struct *vma,
 		unsigned long page_shift,
 		bool pagein)
 {
-	unsigned long src_pfn, dst_pfn = 0;
+	unsigned long src_pfn = 0, dst_pfn = 0;
 	struct migrate_vma mig;
 	struct page *spage;
 	unsigned long pfn;
