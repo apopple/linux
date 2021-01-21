@@ -346,7 +346,15 @@ between device driver specific code and shared common code:
    from the LRU (if system memory since device private pages are not on
    the LRU), unmapped from the process, and a special migration PTE is
    inserted in place of the original PTE.
-   migrate_vma_setup() also clears the ``args->dst`` array.
+
+   A device driver may also initialise ``src`` entries with the
+   ``MIGRATE_PFN_PIN`` flag. This allows the device driver to unmap and pin
+   the existing system page in place whilst migrating page metadata to a
+   device private page. This leave the page isolated from the LRU and gives
+   the device exclusive access to the page data without the need to migrate
+   data as any CPU access will trigger a fault. The device driver needs to
+   keep track of the ``src`` page as it effectively becomes the owner of
+   the page and needs to pass it in when remapping and unpinning the page.
 
 3. The device driver allocates destination pages and copies source pages to
    destination pages.
@@ -357,8 +365,8 @@ between device driver specific code and shared common code:
    array for that page.
 
    The driver then allocates either a device private struct page or a
-   system memory page, locks the page with ``lock_page()``, and fills in the
-   ``dst`` array entry with::
+   system memory page, locks the page with ``lock_page()``, and fills in
+   the ``dst`` array entry with::
 
      dst[i] = migrate_pfn(page_to_pfn(dpage)) | MIGRATE_PFN_LOCKED;
 
@@ -372,6 +380,14 @@ between device driver specific code and shared common code:
    ``struct page`` of the source and either copy the source page to the
    destination or clear the destination device private memory if the pointer
    is ``NULL`` meaning the source page was not populated in system memory.
+
+   Alternatively a driver that is remapping and unpinning a source page
+   obtained from a ``MIGRATE_PFN_PIN`` operation should lock the original
+   source page and pass it in along with the ``MIGRATE_PFN_UNPIN`` flag
+   without any need to copy data::
+
+     dst[i] = migrate_pfn(page_to_pfn(spage)) | MIGRATE_PFN_LOCKED
+              | MIGRATE_PFN_UNPIN;
 
 4. ``migrate_vma_pages()``
 
