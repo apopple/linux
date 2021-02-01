@@ -67,6 +67,7 @@ struct nouveau_dmem_chunk {
 	struct nouveau_bo *bo;
 	struct nouveau_drm *drm;
 	unsigned long callocated;
+	enum nouveau_dmem_type type;
 	struct dev_pagemap pagemap;
 };
 
@@ -81,7 +82,7 @@ struct nouveau_dmem {
 	struct nouveau_dmem_migrate migrate;
 	struct list_head chunks;
 	struct mutex mutex;
-	struct page *free_pages;
+	struct page *free_pages[NOUVEAU_DMEM_NTYPES];
 	spinlock_t lock;
 };
 
@@ -112,8 +113,8 @@ static void nouveau_dmem_page_free(struct page *page)
 	struct nouveau_dmem *dmem = chunk->drm->dmem;
 
 	spin_lock(&dmem->lock);
-	page->zone_device_data = dmem->free_pages;
-	dmem->free_pages = page;
+	page->zone_device_data = dmem->free_pages[chunk->type];
+	dmem->free_pages[chunk->type] = page;
 
 	WARN_ON(!chunk->callocated);
 	chunk->callocated--;
@@ -224,7 +225,8 @@ static const struct dev_pagemap_ops nouveau_dmem_pagemap_ops = {
 };
 
 static int
-nouveau_dmem_chunk_alloc(struct nouveau_drm *drm, struct page **ppage)
+nouveau_dmem_chunk_alloc(struct nouveau_drm *drm, struct page **ppage,
+	enum nouveau_dmem_type type)
 {
 	struct nouveau_dmem_chunk *chunk;
 	struct resource *res;
@@ -248,6 +250,7 @@ nouveau_dmem_chunk_alloc(struct nouveau_drm *drm, struct page **ppage)
 	}
 
 	chunk->drm = drm;
+	chunk->type = type;
 	chunk->pagemap.type = MEMORY_DEVICE_PRIVATE;
 	chunk->pagemap.range.start = res->start;
 	chunk->pagemap.range.end = res->end;
@@ -279,8 +282,8 @@ nouveau_dmem_chunk_alloc(struct nouveau_drm *drm, struct page **ppage)
 	page = pfn_to_page(pfn_first);
 	spin_lock(&drm->dmem->lock);
 	for (i = 0; i < DMEM_CHUNK_NPAGES - 1; ++i, ++page) {
-		page->zone_device_data = drm->dmem->free_pages;
-		drm->dmem->free_pages = page;
+		page->zone_device_data = drm->dmem->free_pages[type];
+		drm->dmem->free_pages[type] = page;
 	}
 	*ppage = page;
 	chunk->callocated++;
@@ -304,22 +307,22 @@ out:
 }
 
 static struct page *
-nouveau_dmem_page_alloc_locked(struct nouveau_drm *drm)
+nouveau_dmem_page_alloc_locked(struct nouveau_drm *drm, enum nouveau_dmem_type type)
 {
 	struct nouveau_dmem_chunk *chunk;
 	struct page *page = NULL;
 	int ret;
 
 	spin_lock(&drm->dmem->lock);
-	if (drm->dmem->free_pages) {
-		page = drm->dmem->free_pages;
-		drm->dmem->free_pages = page->zone_device_data;
+	if (drm->dmem->free_pages[type]) {
+		page = drm->dmem->free_pages[type];
+		drm->dmem->free_pages[type] = page->zone_device_data;
 		chunk = nouveau_page_to_chunk(page);
 		chunk->callocated++;
 		spin_unlock(&drm->dmem->lock);
 	} else {
 		spin_unlock(&drm->dmem->lock);
-		ret = nouveau_dmem_chunk_alloc(drm, &page);
+		ret = nouveau_dmem_chunk_alloc(drm, &page, type);
 		if (ret)
 			return NULL;
 	}
@@ -577,7 +580,7 @@ static unsigned long nouveau_dmem_migrate_copy_one(struct nouveau_drm *drm,
 	if (!(src & MIGRATE_PFN_MIGRATE))
 		goto out;
 
-	dpage = nouveau_dmem_page_alloc_locked(drm);
+	dpage = nouveau_dmem_page_alloc_locked(drm, NOUVEAU_DMEM);
 	if (!dpage)
 		goto out;
 

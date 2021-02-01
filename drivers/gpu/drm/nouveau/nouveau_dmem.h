@@ -28,6 +28,11 @@ struct nouveau_drm;
 struct nouveau_svmm;
 struct hmm_range;
 
+enum nouveau_dmem_type {
+	NOUVEAU_DMEM,
+	NOUVEAU_DMEM_NTYPES, /* Number of types, must be last */
+};
+
 #if IS_ENABLED(CONFIG_DRM_NOUVEAU_SVM)
 void nouveau_dmem_init(struct nouveau_drm *);
 void nouveau_dmem_fini(struct nouveau_drm *);
