@@ -843,7 +843,7 @@ static int fallback_migrate_page(struct address_space *mapping,
  *   < 0 - error code
  *  MIGRATEPAGE_SUCCESS - success
  */
-static int move_to_new_folio(struct folio *dst, struct folio *src,
+int move_to_new_folio(struct folio *dst, struct folio *src,
 				enum migrate_mode mode)
 {
 	struct address_space *mapping;
