@@ -134,8 +134,21 @@ static void pageunmap_range(struct dev_pagemap *pgmap, int range_id)
 	pgmap_array_delete(range);
 }
 
+static unsigned long pfn_next(struct dev_pagemap *pgmap, unsigned long pfn)
+{
+       if (pfn % (1024 << pgmap->vmemmap_shift))
+               cond_resched();
+       return pfn + pgmap_vmemmap_nr(pgmap);
+}
+
+
+#define for_each_device_pfn(pfn, map, i) \
+       for (pfn = pfn_first(map, i); pfn < pfn_end(map, i); \
+            pfn = pfn_next(map, pfn))
+
 void memunmap_pages(struct dev_pagemap *pgmap)
 {
+	unsigned long pfn;
 	int i;
 
 	percpu_ref_kill(&pgmap->ref);

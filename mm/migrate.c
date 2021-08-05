@@ -862,7 +862,12 @@ int move_to_new_folio(struct folio *dst, struct folio *src,
 	if (likely(is_lru)) {
 		if (!mapping)
 			rc = migrate_page(mapping, &dst->page, &src->page, mode);
-		else if (mapping->a_ops->migratepage)
+		/*
+		 * We need to use the fallback path for device private page to
+		 * ensure the page is written out and the buffers released.
+		 */
+		else if (!is_device_private_page(&dst->page) &&
+				mapping->a_ops->migratepage)
 			/*
 			 * Most pages have a mapping and most filesystems
 			 * provide a migratepage callback. Anonymous pages
