@@ -801,6 +801,8 @@ static int dmirror_migrate(struct dmirror *dmirror,
 
 	mmap_read_lock(mm);
 	for (addr = start; addr < end; addr = next) {
+		int i, retried = 0;
+
 		vma = vma_lookup(mm, addr);
 		if (!vma || !(vma->vm_flags & VM_READ)) {
 			ret = -EINVAL;
@@ -810,6 +812,7 @@ static int dmirror_migrate(struct dmirror *dmirror,
 		if (next > vma->vm_end)
 			next = vma->vm_end;
 
+	retry:
 		args.vma = vma;
 		args.src = src_pfns;
 		args.dst = dst_pfns;
@@ -825,6 +828,19 @@ static int dmirror_migrate(struct dmirror *dmirror,
 		migrate_vma_pages(&args);
 		dmirror_migrate_finalize_and_map(&args, dmirror);
 		migrate_vma_finalize(&args);
+
+		for (i = 0; i < ((next - addr) >> PAGE_SHIFT); i++) {
+			if (!(src_pfns[i] & MIGRATE_PFN_MIGRATE)) {
+				if (retried++ < 3) {
+					if (src_pfns[i])
+						wait_on_page_writeback(migrate_pfn_to_page(src_pfns[i]));
+					goto retry;
+				}
+				printk("Not migrating page %d after %d tries\n", i, retried);
+				if (migrate_pfn_to_page(src_pfns[i]))
+					dump_page(migrate_pfn_to_page(src_pfns[i]), "not migrating");
+			}
+		}
 	}
 	mmap_read_unlock(mm);
 	mmput(mm);
@@ -1153,7 +1169,6 @@ static vm_fault_t dmirror_devmem_fault_alloc_and_copy(struct migrate_vma *args,
 		spage = migrate_pfn_to_page(*src);
 		if (!spage || !(*src & MIGRATE_PFN_MIGRATE))
 			continue;
-		spage = spage->zone_device_data;
 
 		dpage = alloc_page_vma(GFP_HIGHUSER_MOVABLE, args->vma, addr);
 		if (!dpage)
@@ -1161,7 +1176,12 @@ static vm_fault_t dmirror_devmem_fault_alloc_and_copy(struct migrate_vma *args,
 
 		lock_page(dpage);
 		xa_erase(&dmirror->pt, addr >> PAGE_SHIFT);
-		copy_highpage(dpage, spage);
+
+		/*
+		 * If there is a page mapping we will read the data from there.
+		 */
+		if (!page_mapping(spage))
+			copy_highpage(dpage, spage);
 		*dst = migrate_pfn(page_to_pfn(dpage));
 		if (*src & MIGRATE_PFN_WRITE)
 			*dst |= MIGRATE_PFN_WRITE;
