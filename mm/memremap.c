@@ -4,6 +4,7 @@
 #include <linux/io.h>
 #include <linux/kasan.h>
 #include <linux/memory_hotplug.h>
+#include <linux/mm.h>
 #include <linux/memremap.h>
 #include <linux/pfn_t.h>
 #include <linux/swap.h>
@@ -138,8 +139,27 @@ void memunmap_pages(struct dev_pagemap *pgmap)
 	int i;
 
 	percpu_ref_kill(&pgmap->ref);
-	for (i = 0; i < pgmap->nr_range; i++)
+	for (i = 0; i < pgmap->nr_range; i++) {
+		for_each_device_pfn(pfn, pgmap, i) {
+			struct page *page = pfn_to_page(pfn);
+
+			/*
+			 * TODO: If the device has dirtied the page we need to
+			 * migrate it back rather than just delete it from the
+			 * page cache.
+			 */
+			if (page_mapping(page)) {
+				lock_page(page);
+				WARN_ON(page_has_private(page));
+				delete_from_page_cache(page);
+				unlock_page(page);
+			}
+			/* Needs review now that device private page ref counting has changed */
+			WARN_ON(1);
+		}
+
 		percpu_ref_put_many(&pgmap->ref, pfn_len(pgmap, i));
+	}
 	wait_for_completion(&pgmap->done);
 	percpu_ref_exit(&pgmap->ref);
 

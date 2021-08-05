@@ -641,6 +641,12 @@ bool filemap_range_has_writeback(struct address_space *mapping,
 	xas_for_each(&xas, page, max) {
 		if (xas_retry(&xas, page))
 			continue;
+		/*
+		 * TODO: We would have to query the driver to find out if write
+		 * back is required. Probably easiest just to migrate the page
+		 * back. Need to drop the rcu lock and retry.
+		 */
+		WARN_ON(is_device_private_page(page));
 		if (xa_is_value(page))
 			continue;
 		if (PageDirty(page) || PageLocked(page) || PageWriteback(page))
@@ -1898,6 +1904,15 @@ repeat:
 		folio_put(folio);
 		goto repeat;
 	}
+
+	if (is_device_private_page(&folio->page)) {
+		rcu_read_unlock();
+		migrate_device_page(&folio->page);
+		folio_put(folio);
+		rcu_read_lock();
+		goto repeat;
+	}
+
 out:
 	rcu_read_unlock();
 
@@ -2046,6 +2061,14 @@ retry:
 
 	if (unlikely(folio != xas_reload(xas))) {
 		folio_put(folio);
+		goto reset;
+	}
+
+	if (is_device_private_page(&folio->page)) {
+		folio_put(folio);
+		rcu_read_unlock();
+		migrate_device_page(&folio->page);
+		rcu_read_lock();
 		goto reset;
 	}
 
@@ -2264,6 +2287,14 @@ unsigned find_get_pages_contig(struct address_space *mapping, pgoff_t index,
 		if (unlikely(folio != xas_reload(&xas)))
 			goto put_page;
 
+		if (is_device_private_page(&folio->page)) {
+			rcu_read_unlock();
+			migrate_device_page(&folio->page);
+			folio_put(folio);
+			rcu_read_lock();
+			goto retry;
+		}
+
 again:
 		pages[ret] = folio_file_page(folio, xas.xa_index);
 		if (++ret == nr_pages)
@@ -2392,6 +2423,14 @@ static void filemap_get_read_batch(struct address_space *mapping,
 
 		if (unlikely(folio != xas_reload(&xas)))
 			goto put_folio;
+
+		if (is_device_private_page(&folio->page)) {
+			rcu_read_unlock();
+			migrate_device_page(&folio->page);
+			folio_put(folio);
+			rcu_read_lock();
+			goto retry;
+		}
 
 		if (!folio_batch_add(fbatch, folio))
 			break;
@@ -3309,6 +3348,8 @@ static struct folio *next_uptodate_page(struct folio *folio,
 			continue;
 		/* Has the page moved or been split? */
 		if (unlikely(folio != xas_reload(xas)))
+			goto skip;
+		if (is_device_private_page(&folio->page))
 			goto skip;
 		if (!folio_test_uptodate(folio) || folio_test_readahead(folio))
 			goto skip;

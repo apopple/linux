@@ -216,7 +216,11 @@ static bool remove_migration_pte(struct folio *folio,
 			rmap_flags |= RMAP_EXCLUSIVE;
 
 		if (unlikely(is_device_private_page(new))) {
-			if (pte_write(pte))
+			/*
+			 * Page should have been written out during migration.
+			 */
+			WARN_ON(PageDirty(new) && page_mapping(new));
+			if (!page_mapping(new) && pte_write(pte))
 				entry = make_writable_device_private_entry(
 							page_to_pfn(new));
 			else

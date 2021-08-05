@@ -24,6 +24,7 @@ extern const char *migrate_reason_names[MR_TYPES];
 
 #ifdef CONFIG_MIGRATION
 
+extern void migrate_device_page(struct page *page);
 extern void putback_movable_pages(struct list_head *l);
 extern int migrate_page(struct address_space *mapping,
 			struct page *newpage, struct page *page,
@@ -49,6 +50,7 @@ int folio_migrate_mapping(struct address_space *mapping,
 
 #else
 
+static inline void migrate_device_page(struct page *page) {}
 static inline void putback_movable_pages(struct list_head *l) {}
 static inline int migrate_pages(struct list_head *l, new_page_t new,
 		free_page_t free, unsigned long private, enum migrate_mode mode,

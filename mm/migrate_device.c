@@ -781,7 +781,18 @@ void migrate_vma_finalize(struct migrate_vma *migrate)
 			putback_lru_page(page);
 
 		if (newpage != page) {
-			unlock_page(newpage);
+			if (!(page_mapping(newpage) && is_device_private_page(page)))
+				unlock_page(newpage);
+			else {
+				/*
+				 * The newpage is visible in the page-cache but still
+				 * locked. Read the contents from the filesystem which
+				 * will unlock the page when done.
+				 */
+				dump_page(newpage, "Restoring page contents\n");
+				page_mapping(newpage)->a_ops->read_folio(migrate->vma->vm_file, page_folio(newpage));
+			}
+
 			if (is_zone_device_page(newpage))
 				put_page(newpage);
 			else
@@ -790,3 +801,53 @@ void migrate_vma_finalize(struct migrate_vma *migrate)
 	}
 }
 EXPORT_SYMBOL(migrate_vma_finalize);
+
+/*
+ * This migrates the device private page back to the page cache. It doesn't
+ * actually copy any data though, it reads it back from the filesystem.
+ */
+void migrate_device_page(struct page *page)
+{
+	int r;
+	struct page *newpage;
+
+	WARN_ON(!is_device_private_page(page));
+
+	lock_page(page);
+	try_to_migrate(page_folio(page), 0);
+
+	/*
+	 * We should always be able to unmap device-private pages. Right?
+	 */
+	WARN_ON(page_mapped(page));
+
+	newpage = alloc_pages(GFP_HIGHUSER_MOVABLE, 0);
+	/*
+	 * OOM is fatal, so need to retry harder although 0-order allocations
+	 * should never fail?
+	 */
+	WARN_ON(!newpage);
+	lock_page(newpage);
+
+	/*
+	 * Replace the device-private page with the new page in the page cache.
+	 */
+	r = move_to_new_folio(page_folio(newpage), page_folio(page), MIGRATE_SYNC_NO_COPY);
+
+	/*
+	 * This should never happen and is also fatal. Need to figure out how to
+	 * signal an IO error.
+	 */
+	WARN_ON(r != MIGRATEPAGE_SUCCESS);
+	remove_migration_ptes(page_folio(page), page_folio(newpage), false);
+
+	unlock_page(page);
+	putback_lru_page(newpage);
+
+	/*
+	 * We don't unlock the new page, IO should do that asynchronously.
+	 */
+        page_mapping(newpage)->a_ops->read_folio(NULL, page_folio(newpage));
+
+	return;
+}
