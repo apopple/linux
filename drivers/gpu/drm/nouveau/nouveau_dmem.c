@@ -632,7 +632,11 @@ static void nouveau_dmem_migrate_chunk(struct nouveau_drm *drm,
 	nouveau_fence_new(drm->dmem->migrate.chan, false, &fence);
 	migrate_vma_pages(args);
 	nouveau_dmem_fence_done(&fence);
-	nouveau_pfns_map(svmm, args->vma->vm_mm, args->start, pfns, i);
+	for (addr = args->start, i = 0; addr < args->end; addr += PAGE_SIZE, i++) {
+		if (!(args->src[i] & MIGRATE_PFN_MIGRATE))
+			continue;
+		nouveau_pfns_map(svmm, args->vma->vm_mm, addr, &pfns[i], 1);
+	}
 
 	while (nr_dma--) {
 		dma_unmap_page(drm->dev->dev, dma_addrs[nr_dma], PAGE_SIZE,
@@ -684,6 +688,14 @@ nouveau_dmem_migrate_vma(struct nouveau_drm *drm,
 			args.end = end;
 		else
 			args.end = args.start + (max << PAGE_SHIFT);
+
+		ret = migrate_vma_setup(&args);
+		if (ret)
+			goto out_free_pfns;
+
+		if (args.cpages)
+			nouveau_dmem_migrate_chunk(drm, svmm, &args, dma_addrs,
+						   pfns);
 
 		ret = migrate_vma_setup(&args);
 		if (ret)

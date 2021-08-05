@@ -702,6 +702,15 @@ static int nouveau_range_fault(struct nouveau_svmm *svmm,
 
 	nouveau_hmm_convert_pfn(drm, &range, args);
 
+	/*
+	 * TODO: hmm_range_fault() will never upgrade device private pages to
+	 * writeable. For now HACK around this by just making them writable if
+	 * the GPU asks. Obviously this is TOTALLY wrong and a secutiry risk!!!
+	 */
+	if (is_device_private_page(hmm_pfn_to_page(range.hmm_pfns[0])) &&
+	    hmm_flags & HMM_PFN_REQ_WRITE)
+		args->p.phys[0] |= NVIF_VMM_PFNMAP_V0_W;
+
 	ret = nvif_object_ioctl(&svmm->vmm->vmm.object, args, size, NULL);
 	mutex_unlock(&svmm->mutex);
 
