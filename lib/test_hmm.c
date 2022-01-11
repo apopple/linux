@@ -1403,6 +1403,7 @@ static int __init hmm_dmirror_init(void)
 	}
 	for (id = 0; id < ndevices; id++) {
 		ret = dmirror_device_init(dmirror_devices + id, id);
+		ret = -ENOMEM;
 		if (ret)
 			goto err_chrdev;
 	}
@@ -1422,6 +1423,7 @@ static void __exit hmm_dmirror_exit(void)
 {
 	int id;
 
+	printk("EXIT\n");
 	for (id = 0; id < DMIRROR_NDEVICES; id++)
 		if (dmirror_devices[id].zone_device_type)
 			dmirror_device_remove(dmirror_devices + id);
