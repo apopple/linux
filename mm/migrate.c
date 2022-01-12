@@ -2664,6 +2664,8 @@ int migrate_vma_setup(struct migrate_vma *args)
 	args->end &= PAGE_MASK;
 	if (!args->src || !args->dst)
 		return -EINVAL;
+	if (!args->src || !args->dst)
+		return -EINVAL;
 	if (args->vma) {
 		if (is_vm_hugetlb_page(args->vma) ||
 			(args->vma->vm_flags & VM_SPECIAL) || vma_is_dax(args->vma))
