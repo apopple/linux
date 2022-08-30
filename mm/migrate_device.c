@@ -674,7 +674,7 @@ abort:
 	*src &= ~MIGRATE_PFN_MIGRATE;
 }
 
-static void migrate_device_pages(unsigned long *src_pfns,
+static void __migrate_device_pages(unsigned long *src_pfns,
 				unsigned long *dst_pfns, unsigned long npages,
 				struct migrate_vma *migrate)
 {
@@ -696,6 +696,9 @@ static void migrate_device_pages(unsigned long *src_pfns,
 		if (!page) {
 			unsigned long addr;
 
+			if (!(src_pfns[i] & MIGRATE_PFN_MIGRATE))
+				continue;
+
 			/*
 			 * The only time there is no vma is when called from
 			 * migrate_device_coherent_page(). However this isn't
@@ -703,8 +706,6 @@ static void migrate_device_pages(unsigned long *src_pfns,
 			 */
 			VM_BUG_ON(!migrate);
 			addr = migrate->start + i*PAGE_SIZE;
-			if (!(src_pfns[i] & MIGRATE_PFN_MIGRATE))
-				continue;
 			if (!notified) {
 				notified = true;
 
@@ -759,6 +760,13 @@ static void migrate_device_pages(unsigned long *src_pfns,
 		mmu_notifier_invalidate_range_only_end(&range);
 }
 
+void migrate_device_pages(unsigned long *src_pfns, unsigned long *dst_pfns,
+			unsigned long npages)
+{
+	__migrate_device_pages(src_pfns, dst_pfns, npages, NULL);
+}
+EXPORT_SYMBOL(migrate_device_pages);
+
 /**
  * migrate_vma_pages() - migrate meta-data from src page to dst page
  * @migrate: migrate struct containing all migration information
@@ -769,12 +777,12 @@ static void migrate_device_pages(unsigned long *src_pfns,
  */
 void migrate_vma_pages(struct migrate_vma *migrate)
 {
-	migrate_device_pages(migrate->src, migrate->dst, migrate->npages, migrate);
+	__migrate_device_pages(migrate->src, migrate->dst, migrate->npages, migrate);
 }
 EXPORT_SYMBOL(migrate_vma_pages);
 
-static void migrate_device_finalize(unsigned long *src_pfns,
-				unsigned long *dst_pfns, unsigned long npages)
+void migrate_device_finalize(unsigned long *src_pfns,
+			unsigned long *dst_pfns, unsigned long npages)
 {
 	unsigned long i;
 
@@ -818,6 +826,7 @@ static void migrate_device_finalize(unsigned long *src_pfns,
 		}
 	}
 }
+EXPORT_SYMBOL(migrate_device_finalize);
 
 /**
  * migrate_vma_finalize() - restore CPU page table entry
@@ -835,6 +844,50 @@ void migrate_vma_finalize(struct migrate_vma *migrate)
 	migrate_device_finalize(migrate->src, migrate->dst, migrate->npages);
 }
 EXPORT_SYMBOL(migrate_vma_finalize);
+
+/*
+ * Migrate a range of device private pfns back to normal memory.
+ */
+int migrate_device_range(unsigned long *src_pfns, unsigned long start,
+			unsigned long npages)
+{
+	unsigned long i, pfn;
+
+	for (pfn = start, i = 0; i < npages; pfn++, i++) {
+		struct page *page = pfn_to_page(pfn);
+
+		src_pfns[i] = 0;
+		if (WARN_ON_ONCE(!is_device_private_page(page) &&
+					!is_device_coherent_page(page)))
+			continue;
+
+		if (!get_page_unless_zero(page))
+			continue;
+
+		if (!trylock_page(page)) {
+			put_page(page);
+			continue;
+		}
+
+		/*
+		 * If we have the page locked but it's not mapped it must be a
+		 * free or about to be free page because device pages only
+		 * support anonymous private mappings.
+		 */
+		if (!page_mapped(page)) {
+			unlock_page(page);
+			put_page(page);
+			continue;
+		}
+
+		src_pfns[i] = migrate_pfn(pfn) | MIGRATE_PFN_MIGRATE;
+	}
+
+	migrate_device_unmap(src_pfns, npages, NULL);
+
+	return 0;
+}
+EXPORT_SYMBOL(migrate_device_range);
 
 /*
  * Migrate a device coherent page back to normal memory. The caller should have
@@ -866,7 +919,7 @@ int migrate_device_coherent_page(struct page *page)
 		dst_pfn = migrate_pfn(page_to_pfn(dpage));
 	}
 
-	migrate_device_pages(&src_pfn, &dst_pfn, 1, NULL);
+	migrate_device_pages(&src_pfn, &dst_pfn, 1);
 	if (src_pfn & MIGRATE_PFN_MIGRATE)
 		copy_highpage(dpage, page);
 	migrate_device_finalize(&src_pfn, &dst_pfn, 1);
