@@ -1150,6 +1150,13 @@ config LRU_GEN_STATS
 	  This option has a per-memcg and per-node memory overhead.
 # }
 
+config CGROUP_PINS
+    bool "Cgroup for FOLL_LONGTERM pins"
+    default y
+
+    help
+      Allows cgroups to place a limit on the number of FOLL_LONGTERM pins.
+
 source "mm/damon/Kconfig"
 
 endmenu

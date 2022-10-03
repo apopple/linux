@@ -928,4 +928,20 @@ static inline void cgroup_bpf_put(struct cgroup *cgrp) {}
 
 #endif /* CONFIG_CGROUP_BPF */
 
+#ifdef CONFIG_CGROUP_PINS
+
+struct pins_cgroup *get_pins_cg(struct task_struct *task);
+void put_pins_cg(struct pins_cgroup *cg);
+void pins_uncharge(struct pins_cgroup *pins, int num);
+int pins_try_charge(struct pins_cgroup *pins, int num);
+
+#else /* CONFIG_CGROUP_PINS */
+
+struct pins_cgroup *get_pins_cg(struct task_struct *task) {}
+static inline void put_pins_cg(struct pins_cgroup *cg) {}
+static inline void pins_uncharge(struct pins_cgroup *pins, int num) {}
+static inline int pins_try_charge(struct pins_cgroup *pins, int num) {}
+
+#endif /* CONFIG_CGROUP_PINS */
+
 #endif /* _LINUX_CGROUP_H */
