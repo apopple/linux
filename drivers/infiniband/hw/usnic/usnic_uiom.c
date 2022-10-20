@@ -123,10 +123,7 @@ static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
 	uiomr->owning_mm = mm = current->mm;
 	mmap_read_lock(mm);
 
-	locked = atomic64_add_return(npages, &current->mm->pinned_vm);
-	lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
-
-	if ((locked > lock_limit) && !capable(CAP_IPC_LOCK)) {
+	if (account_pinned_vm(current->mm, npages, false)) {
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -179,7 +176,7 @@ static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
 out:
 	if (ret < 0) {
 		usnic_uiom_put_pages(chunk_list, 0);
-		atomic64_sub(npages, &current->mm->pinned_vm);
+		unaccount_pinned_vm(current->mm, npages);
 	} else
 		mmgrab(uiomr->owning_mm);
 
@@ -431,7 +428,7 @@ void usnic_uiom_reg_release(struct usnic_uiom_reg *uiomr)
 {
 	__usnic_uiom_reg_release(uiomr->pd, uiomr, 1);
 
-	atomic64_sub(usnic_uiom_num_pages(uiomr), &uiomr->owning_mm->pinned_vm);
+	unaccount_pinned_vm(uiomr->owning_mm, usnic_uiom_num_pages(uiomr));
 	__usnic_uiom_release_tail(uiomr);
 }
 

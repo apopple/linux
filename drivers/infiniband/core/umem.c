@@ -149,8 +149,6 @@ struct ib_umem *ib_umem_get(struct ib_device *device, unsigned long addr,
 {
 	struct ib_umem *umem;
 	struct page **page_list;
-	unsigned long lock_limit;
-	unsigned long new_pinned;
 	unsigned long cur_base;
 	unsigned long dma_attr = 0;
 	struct mm_struct *mm;
@@ -199,11 +197,7 @@ struct ib_umem *ib_umem_get(struct ib_device *device, unsigned long addr,
 		goto out;
 	}
 
-	lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
-
-	new_pinned = atomic64_add_return(npages, &mm->pinned_vm);
-	if (new_pinned > lock_limit && !capable(CAP_IPC_LOCK)) {
-		atomic64_sub(npages, &mm->pinned_vm);
+	if (account_pinned_vm(mm, npages, false)) {
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -248,7 +242,7 @@ struct ib_umem *ib_umem_get(struct ib_device *device, unsigned long addr,
 
 umem_release:
 	__ib_umem_release(device, umem, 0);
-	atomic64_sub(ib_umem_num_pages(umem), &mm->pinned_vm);
+	unaccount_pinned_vm(mm, ib_umem_num_pages(umem));
 out:
 	free_page((unsigned long) page_list);
 umem_kfree:
@@ -275,7 +269,7 @@ void ib_umem_release(struct ib_umem *umem)
 
 	__ib_umem_release(umem->ibdev, umem, 1);
 
-	atomic64_sub(ib_umem_num_pages(umem), &umem->owning_mm->pinned_vm);
+	unaccount_pinned_vm(umem->owning_mm, ib_umem_num_pages(umem));
 	mmdrop(umem->owning_mm);
 	kfree(umem);
 }

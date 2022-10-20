@@ -702,7 +702,7 @@ static void vhost_vdpa_pa_unmap(struct vhost_vdpa *v,
 				set_page_dirty_lock(page);
 			unpin_user_page(page);
 		}
-		atomic64_sub(PFN_DOWN(map->size), &dev->mm->pinned_vm);
+		unaccount_pinned_vm(dev->mm, PFN_DOWN(map->size));
 		vhost_iotlb_map_free(iotlb, map);
 	}
 }
@@ -765,6 +765,10 @@ static int vhost_vdpa_map(struct vhost_vdpa *v, struct vhost_iotlb *iotlb,
 	u32 asid = iotlb_to_asid(iotlb);
 	int r = 0;
 
+	if (!vdpa->use_va)
+		if (account_pinned_vm(dev->mm, PFN_DOWN(size), false))
+			return -ENOMEM;
+
 	r = vhost_iotlb_add_range_ctx(iotlb, iova, iova + size - 1,
 				      pa, perm, opaque);
 	if (r)
@@ -783,9 +787,6 @@ static int vhost_vdpa_map(struct vhost_vdpa *v, struct vhost_iotlb *iotlb,
 		vhost_iotlb_del_range(iotlb, iova, iova + size - 1);
 		return r;
 	}
-
-	if (!vdpa->use_va)
-		atomic64_add(PFN_DOWN(size), &dev->mm->pinned_vm);
 
 	return 0;
 }
@@ -876,7 +877,7 @@ static int vhost_vdpa_pa_map(struct vhost_vdpa *v,
 	unsigned long list_size = PAGE_SIZE / sizeof(struct page *);
 	unsigned int gup_flags = FOLL_LONGTERM;
 	unsigned long npages, cur_base, map_pfn, last_pfn = 0;
-	unsigned long lock_limit, sz2pin, nchunks, i;
+	unsigned long sz2pin, nchunks, i;
 	u64 start = iova;
 	long pinned;
 	int ret = 0;
@@ -896,12 +897,6 @@ static int vhost_vdpa_pa_map(struct vhost_vdpa *v,
 	}
 
 	mmap_read_lock(dev->mm);
-
-	lock_limit = PFN_DOWN(rlimit(RLIMIT_MEMLOCK));
-	if (npages + atomic64_read(&dev->mm->pinned_vm) > lock_limit) {
-		ret = -ENOMEM;
-		goto unlock;
-	}
 
 	cur_base = uaddr & PAGE_MASK;
 	iova &= PAGE_MASK;

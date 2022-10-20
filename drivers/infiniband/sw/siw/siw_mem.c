@@ -79,7 +79,7 @@ void siw_umem_release(struct siw_umem *umem, bool dirty)
 		kfree(umem->page_chunk[i].plist);
 		num_pages -= to_free;
 	}
-	atomic64_sub(umem->num_pages, &mm_s->pinned_vm);
+	unaccount_pinned_vm(mm_s, umem->num_pages);
 
 	mmdrop(mm_s);
 	kfree(umem->page_chunk);
@@ -367,7 +367,6 @@ struct siw_umem *siw_umem_get(u64 start, u64 len, bool writable)
 	struct siw_umem *umem;
 	struct mm_struct *mm_s;
 	u64 first_page_va;
-	unsigned long mlock_limit;
 	unsigned int foll_flags = FOLL_WRITE;
 	int num_pages, num_chunks, i, rv = 0;
 
@@ -396,9 +395,7 @@ struct siw_umem *siw_umem_get(u64 start, u64 len, bool writable)
 
 	mmap_read_lock(mm_s);
 
-	mlock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
-
-	if (num_pages + atomic64_read(&mm_s->pinned_vm) > mlock_limit) {
+	if (account_pinned_vm(mm_s, num_pages, false)) {
 		rv = -ENOMEM;
 		goto out_sem_up;
 	}
@@ -408,7 +405,7 @@ struct siw_umem *siw_umem_get(u64 start, u64 len, bool writable)
 		kcalloc(num_chunks, sizeof(struct siw_page_chunk), GFP_KERNEL);
 	if (!umem->page_chunk) {
 		rv = -ENOMEM;
-		goto out_sem_up;
+		goto out_unaccount;
 	}
 	for (i = 0; num_pages; i++) {
 		int got, nents = min_t(int, num_pages, PAGES_PER_CHUNK);
@@ -417,7 +414,7 @@ struct siw_umem *siw_umem_get(u64 start, u64 len, bool writable)
 			kcalloc(nents, sizeof(struct page *), GFP_KERNEL);
 		if (!umem->page_chunk[i].plist) {
 			rv = -ENOMEM;
-			goto out_sem_up;
+			goto out_unaccount;
 		}
 		got = 0;
 		while (nents) {
@@ -427,16 +424,19 @@ struct siw_umem *siw_umem_get(u64 start, u64 len, bool writable)
 					    foll_flags | FOLL_LONGTERM,
 					    plist, NULL);
 			if (rv < 0)
-				goto out_sem_up;
+				goto out_unaccount;
 
 			umem->num_pages += rv;
-			atomic64_add(rv, &mm_s->pinned_vm);
 			first_page_va += rv * PAGE_SIZE;
 			nents -= rv;
 			got += rv;
 		}
 		num_pages -= got;
 	}
+
+out_unaccount:
+	unaccount_pinned_vm(mm_s, num_pages);
+
 out_sem_up:
 	mmap_read_unlock(mm_s);
 

@@ -64,11 +64,15 @@ int hfi1_acquire_user_pages(struct mm_struct *mm, unsigned long vaddr, size_t np
 	int ret;
 	unsigned int gup_flags = FOLL_LONGTERM | (writable ? FOLL_WRITE : 0);
 
+	ret = account_pinned_vm(mm, npages, false);
+	if (ret)
+		return ret;
+
 	ret = pin_user_pages_fast(vaddr, npages, gup_flags, pages);
 	if (ret < 0)
 		return ret;
 
-	atomic64_add(ret, &mm->pinned_vm);
+	unaccount_pinned_vm(mm, npages - ret);
 
 	return ret;
 }
@@ -79,6 +83,6 @@ void hfi1_release_user_pages(struct mm_struct *mm, struct page **p,
 	unpin_user_pages_dirty_lock(p, npages, dirty);
 
 	if (mm) { /* during close after signal, mm can be NULL */
-		atomic64_sub(npages, &mm->pinned_vm);
+		unaccount_pinned_vm(mm, npages);
 	}
 }

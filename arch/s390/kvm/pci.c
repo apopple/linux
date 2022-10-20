@@ -198,7 +198,7 @@ static inline void unaccount_mem(unsigned long nr_pages)
 	if (user)
 		atomic_long_sub(nr_pages, &user->locked_vm);
 	if (current->mm)
-		atomic64_sub(nr_pages, &current->mm->pinned_vm);
+		unaccount_pinned_vm(&current->mm->pinned_vm, nr_pages);
 }
 
 static inline int account_mem(unsigned long nr_pages)
@@ -216,7 +216,8 @@ static inline int account_mem(unsigned long nr_pages)
 	} while (atomic_long_cmpxchg(&user->locked_vm, cur_pages,
 					new_pages) != cur_pages);
 
-	atomic64_add(nr_pages, &current->mm->pinned_vm);
+	if (account_pinned_vm(current->mm, nr_pages, true))
+		return -ENOMEM;
 
 	return 0;
 }

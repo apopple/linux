@@ -430,6 +430,30 @@ void arch_pick_mmap_layout(struct mm_struct *mm, struct rlimit *rlim_stack)
 }
 #endif
 
+int account_pinned_vm(struct mm_struct *mm, unsigned long npages,
+		bool bypass_rlim)
+{
+	unsigned long lock_limit;
+	unsigned long new_pinned;
+
+	lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+
+	new_pinned = atomic64_add_return(npages, &mm->pinned_vm);
+	if (!bypass_rlim && new_pinned > lock_limit && !capable(CAP_IPC_LOCK)) {
+		atomic64_sub(npages, &mm->pinned_vm);
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(account_pinned_vm);
+
+void unaccount_pinned_vm(struct mm_struct *mm, unsigned long npages)
+{
+	atomic64_sub(npages, &mm->pinned_vm);
+}
+EXPORT_SYMBOL_GPL(unaccount_pinned_vm);
+
 /**
  * __account_locked_vm - account locked pages to an mm's locked_vm
  * @mm:          mm to account against

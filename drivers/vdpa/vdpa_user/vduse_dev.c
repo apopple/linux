@@ -950,7 +950,7 @@ static int vduse_dev_dereg_umem(struct vduse_dev *dev,
 	vduse_domain_remove_user_bounce_pages(dev->domain);
 	unpin_user_pages_dirty_lock(dev->umem->pages,
 				    dev->umem->npages, true);
-	atomic64_sub(dev->umem->npages, &dev->umem->mm->pinned_vm);
+	unaccount_pinned_vm(dev->umem->mm, dev->umem->npages);
 	mmdrop(dev->umem->mm);
 	vfree(dev->umem->pages);
 	kfree(dev->umem);
@@ -990,8 +990,7 @@ static int vduse_dev_reg_umem(struct vduse_dev *dev,
 
 	mmap_read_lock(current->mm);
 
-	lock_limit = PFN_DOWN(rlimit(RLIMIT_MEMLOCK));
-	if (npages + atomic64_read(&current->mm->pinned_vm) > lock_limit)
+	if (account_pinned_vm(npages, current->mm, false))
 		goto out;
 
 	pinned = pin_user_pages(uaddr, npages, FOLL_LONGTERM | FOLL_WRITE,
@@ -1006,8 +1005,6 @@ static int vduse_dev_reg_umem(struct vduse_dev *dev,
 	if (ret)
 		goto out;
 
-	atomic64_add(npages, &current->mm->pinned_vm);
-
 	umem->pages = page_list;
 	umem->npages = pinned;
 	umem->iova = iova;
@@ -1016,8 +1013,10 @@ static int vduse_dev_reg_umem(struct vduse_dev *dev,
 
 	dev->umem = umem;
 out:
-	if (ret && pinned > 0)
+	if (ret && pinned > 0) {
 		unpin_user_pages(page_list, pinned);
+		unaccount_pinned_vm(current->mm, npages);
+	}
 
 	mmap_read_unlock(current->mm);
 unlock:
