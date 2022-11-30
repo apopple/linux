@@ -197,7 +197,7 @@ struct ib_umem *ib_umem_get(struct ib_device *device, unsigned long addr,
 		goto out;
 	}
 
-	if (account_pinned_vm(mm, npages, false)) {
+	if (__account_pinned_vm(mm, npages, false)) {
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -242,7 +242,7 @@ struct ib_umem *ib_umem_get(struct ib_device *device, unsigned long addr,
 
 umem_release:
 	__ib_umem_release(device, umem, 0);
-	unaccount_pinned_vm(mm, ib_umem_num_pages(umem));
+	__unaccount_pinned_vm(mm, ib_umem_num_pages(umem));
 out:
 	free_page((unsigned long) page_list);
 umem_kfree:
@@ -269,7 +269,7 @@ void ib_umem_release(struct ib_umem *umem)
 
 	__ib_umem_release(umem->ibdev, umem, 1);
 
-	unaccount_pinned_vm(umem->owning_mm, ib_umem_num_pages(umem));
+	__unaccount_pinned_vm(umem->owning_mm, ib_umem_num_pages(umem));
 	mmdrop(umem->owning_mm);
 	kfree(umem);
 }

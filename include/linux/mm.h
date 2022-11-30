@@ -1964,9 +1964,14 @@ int get_user_pages_fast(unsigned long start, int nr_pages,
 int pin_user_pages_fast(unsigned long start, int nr_pages,
 			unsigned int gup_flags, struct page **pages);
 
-int account_pinned_vm(struct mm_struct *mm, unsigned long npages,
+int __account_pinned_vm(struct mm_struct *mm, unsigned long npages,
 		bool bypass_rlim);
-void unaccount_pinned_vm(struct mm_struct *mm, unsigned long npages);
+void __unaccount_pinned_vm(struct mm_struct *mm, unsigned long npages);
+void vm_account_init(struct vm_account *vm_account, struct task_struct *task);
+void vm_account_release(struct vm_account *vm_account);
+int account_pinned_vm(struct vm_account *vm_account, unsigned long npages,
+		bool bypass_rlim);
+void unaccount_pinned_vm(struct vm_account *vm_account, unsigned long npages);
 
 int account_locked_user_vm(struct user_struct *user, unsigned long npages);
 void unaccount_locked_user_vm(struct user_struct *user, unsigned long npages);

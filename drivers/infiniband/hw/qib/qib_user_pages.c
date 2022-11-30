@@ -98,7 +98,7 @@ int qib_get_user_pages(unsigned long start_page, size_t num_pages,
 	size_t got;
 	int ret;
 
-	if (account_pinned_vm(current->mm, num_pages, false)) {
+	if (__account_pinned_vm(current->mm, num_pages, false)) {
 		ret = -ENOMEM;
 		goto bail;
 	}
@@ -120,7 +120,7 @@ int qib_get_user_pages(unsigned long start_page, size_t num_pages,
 bail_release:
 	__qib_release_user_pages(p, got, 0);
 bail:
-	unaccount_pinned_vm(current->mm, num_pages);
+	__unaccount_pinned_vm(current->mm, num_pages);
 	return ret;
 }
 
@@ -130,5 +130,5 @@ void qib_release_user_pages(struct page **p, size_t num_pages)
 
 	/* during close after signal, mm can be NULL */
 	if (current->mm)
-		unaccount_pinned_vm(current->mm, num_pages);
+		__unaccount_pinned_vm(current->mm, num_pages);
 }

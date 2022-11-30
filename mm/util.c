@@ -430,7 +430,21 @@ void arch_pick_mmap_layout(struct mm_struct *mm, struct rlimit *rlim_stack)
 }
 #endif
 
-int account_pinned_vm(struct mm_struct *mm, unsigned long npages,
+void vm_account_init(struct vm_account *vm_account, struct task_struct *task)
+{
+	mmgrab(task->mm);
+	vm_account->mm = task->mm;
+	vm_account->pins_cg = get_pins_cg(task);
+}
+
+void vm_account_release(struct vm_account *vm_account)
+{
+	mmdrop(vm_account->mm);
+	put_pins_cg(vm_account->pins_cg);
+}
+
+
+int __account_pinned_vm(struct mm_struct *mm, unsigned long npages,
 		bool bypass_rlim)
 {
 	unsigned long lock_limit;
@@ -446,11 +460,33 @@ int account_pinned_vm(struct mm_struct *mm, unsigned long npages,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(account_pinned_vm);
+EXPORT_SYMBOL_GPL(__account_pinned_vm);
 
-void unaccount_pinned_vm(struct mm_struct *mm, unsigned long npages)
+void __unaccount_pinned_vm(struct mm_struct *mm, unsigned long npages)
 {
 	atomic64_sub(npages, &mm->pinned_vm);
+}
+EXPORT_SYMBOL_GPL(__unaccount_pinned_vm);
+
+int account_pinned_vm(struct vm_account *vm_account, unsigned long npages,
+		bool bypass_rlim)
+{
+	if (pins_try_charge(vm_account->pins_cg, npages))
+		return -ENOMEM;
+
+	if (__account_pinned_vm(vm_account->mm, npages, bypass_rlim)) {
+		pins_uncharge(vm_account->pins_cg, npages);
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(account_pinned_vm);
+
+void unaccount_pinned_vm(struct vm_account *vm_account, unsigned long npages)
+{
+	__unaccount_pinned_vm(vm_account->mm, npages);
+	pins_uncharge(vm_account->pins_cg, npages);
 }
 EXPORT_SYMBOL_GPL(unaccount_pinned_vm);
 

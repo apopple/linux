@@ -198,7 +198,8 @@ static inline void unaccount_mem(unsigned long nr_pages)
 	if (user)
 		unaccount_locked_user_vm(user, nr_pages);
 	if (current->mm)
-		unaccount_pinned_vm(&current->mm->pinned_vm, nr_pages);
+		__unaccount_pinned_vm(&current->mm, nr_pages);
+
 }
 
 static inline int account_mem(unsigned long nr_pages)
@@ -209,7 +210,7 @@ static inline int account_mem(unsigned long nr_pages)
 	if (account_locked_user_vm(user, nr_pages))
 		return -ENOMEM;
 
-	if (account_pinned_vm(current->mm, nr_pages, true))
+	if (__account_pinned_vm(current->mm, nr_pages, true))
 		return -ENOMEM;
 
 	return 0;

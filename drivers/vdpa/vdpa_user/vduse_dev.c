@@ -950,7 +950,7 @@ static int vduse_dev_dereg_umem(struct vduse_dev *dev,
 	vduse_domain_remove_user_bounce_pages(dev->domain);
 	unpin_user_pages_dirty_lock(dev->umem->pages,
 				    dev->umem->npages, true);
-	unaccount_pinned_vm(dev->umem->mm, dev->umem->npages);
+	__unaccount_pinned_vm(dev->umem->mm, dev->umem->npages);
 	mmdrop(dev->umem->mm);
 	vfree(dev->umem->pages);
 	kfree(dev->umem);
@@ -990,7 +990,7 @@ static int vduse_dev_reg_umem(struct vduse_dev *dev,
 
 	mmap_read_lock(current->mm);
 
-	if (account_pinned_vm(npages, current->mm, false))
+	if (__account_pinned_vm(npages, current->mm, false))
 		goto out;
 
 	pinned = pin_user_pages(uaddr, npages, FOLL_LONGTERM | FOLL_WRITE,
@@ -1015,7 +1015,7 @@ static int vduse_dev_reg_umem(struct vduse_dev *dev,
 out:
 	if (ret && pinned > 0) {
 		unpin_user_pages(page_list, pinned);
-		unaccount_pinned_vm(current->mm, npages);
+		__unaccount_pinned_vm(current->mm, npages);
 	}
 
 	mmap_read_unlock(current->mm);

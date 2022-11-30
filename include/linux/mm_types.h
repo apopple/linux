@@ -1003,4 +1003,9 @@ enum fault_flag {
 
 typedef unsigned int __bitwise zap_flags_t;
 
+struct vm_account {
+	struct mm_struct *mm;
+	struct pins_cgroup *pins_cg;
+};
+
 #endif /* _LINUX_MM_TYPES_H */
