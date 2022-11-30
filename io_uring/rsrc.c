@@ -44,28 +44,19 @@ void io_rsrc_refs_drop(struct io_ring_ctx *ctx)
 
 int __io_account_mem(struct user_struct *user, unsigned long nr_pages)
 {
-	unsigned long page_limit, cur_pages, new_pages;
-
 	if (!nr_pages)
 		return 0;
 
-	/* Don't allow more pages than we can safely lock */
-	page_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+	if (account_locked_user_vm(user, nr_pages))
+		return -ENOMEM;
 
-	cur_pages = atomic_long_read(&user->locked_vm);
-	do {
-		new_pages = cur_pages + nr_pages;
-		if (new_pages > page_limit)
-			return -ENOMEM;
-	} while (!atomic_long_try_cmpxchg(&user->locked_vm,
-					  &cur_pages, new_pages));
 	return 0;
 }
 
 static void io_unaccount_mem(struct io_ring_ctx *ctx, unsigned long nr_pages)
 {
 	if (ctx->user)
-		__io_unaccount_mem(ctx->user, nr_pages);
+		unaccount_locked_user_vm(ctx->user, nr_pages);
 
 	if (ctx->mm_account)
 		atomic64_sub(nr_pages, &ctx->mm_account->pinned_vm);

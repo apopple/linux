@@ -454,6 +454,29 @@ void unaccount_pinned_vm(struct mm_struct *mm, unsigned long npages)
 }
 EXPORT_SYMBOL_GPL(unaccount_pinned_vm);
 
+void unaccount_locked_user_vm(struct user_struct *user, unsigned long npages)
+{
+	atomic64_sub(npages, &user->locked_vm);
+}
+EXPORT_SYMBOL_GPL(unaccount_locked_user_vm);
+
+int account_locked_user_vm(struct user_struct *user, unsigned long npages)
+{
+	unsigned long lock_limit;
+	unsigned long new_pinned;
+
+	lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+
+	new_pinned = atomic64_add_return(npages, &user->locked_vm);
+	if (new_pinned > lock_limit && !capable(CAP_IPC_LOCK)) {
+		atomic64_sub(npages, &user->locked_vm);
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(account_locked_user_vm);
+
 /**
  * __account_locked_vm - account locked pages to an mm's locked_vm
  * @mm:          mm to account against

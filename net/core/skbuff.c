@@ -1246,23 +1246,17 @@ EXPORT_SYMBOL_GPL(skb_morph);
 
 int mm_account_pinned_pages(struct mmpin *mmp, size_t size)
 {
-	unsigned long max_pg, num_pg, new_pg, old_pg;
+	unsigned long num_pg;
 	struct user_struct *user;
 
 	if (capable(CAP_IPC_LOCK) || !size)
 		return 0;
 
 	num_pg = (size >> PAGE_SHIFT) + 2;	/* worst case */
-	max_pg = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 	user = mmp->user ? : current_user();
 
-	do {
-		old_pg = atomic_long_read(&user->locked_vm);
-		new_pg = old_pg + num_pg;
-		if (new_pg > max_pg)
-			return -ENOBUFS;
-	} while (atomic_long_cmpxchg(&user->locked_vm, old_pg, new_pg) !=
-		 old_pg);
+	if (account_locked_user_vm(user, num_pg))
+		return -ENOBUFS;
 
 	if (!mmp->user) {
 		mmp->user = get_uid(user);
@@ -1278,7 +1272,7 @@ EXPORT_SYMBOL_GPL(mm_account_pinned_pages);
 void mm_unaccount_pinned_pages(struct mmpin *mmp)
 {
 	if (mmp->user) {
-		atomic_long_sub(mmp->num_pg, &mmp->user->locked_vm);
+		unaccount_locked_user_vm(mmp->user, mmp->num_pg);
 		free_uid(mmp->user);
 	}
 }

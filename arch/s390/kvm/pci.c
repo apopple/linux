@@ -196,7 +196,7 @@ static inline void unaccount_mem(unsigned long nr_pages)
 	struct user_struct *user = get_uid(current_user());
 
 	if (user)
-		atomic_long_sub(nr_pages, &user->locked_vm);
+		unaccount_locked_user_vm(user, nr_pages);
 	if (current->mm)
 		unaccount_pinned_vm(&current->mm->pinned_vm, nr_pages);
 }
@@ -206,15 +206,8 @@ static inline int account_mem(unsigned long nr_pages)
 	struct user_struct *user = get_uid(current_user());
 	unsigned long page_limit, cur_pages, new_pages;
 
-	page_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
-
-	do {
-		cur_pages = atomic_long_read(&user->locked_vm);
-		new_pages = cur_pages + nr_pages;
-		if (new_pages > page_limit)
-			return -ENOMEM;
-	} while (atomic_long_cmpxchg(&user->locked_vm, cur_pages,
-					new_pages) != cur_pages);
+	if (account_locked_user_vm(user, nr_pages))
+		return -ENOMEM;
 
 	if (account_pinned_vm(current->mm, nr_pages, true))
 		return -ENOMEM;

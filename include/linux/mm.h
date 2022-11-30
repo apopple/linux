@@ -1968,6 +1968,8 @@ int account_pinned_vm(struct mm_struct *mm, unsigned long npages,
 		bool bypass_rlim);
 void unaccount_pinned_vm(struct mm_struct *mm, unsigned long npages);
 
+int account_locked_user_vm(struct user_struct *user, unsigned long npages);
+void unaccount_locked_user_vm(struct user_struct *user, unsigned long npages);
 int account_locked_vm(struct mm_struct *mm, unsigned long pages, bool inc);
 int __account_locked_vm(struct mm_struct *mm, unsigned long pages, bool inc,
 			struct task_struct *task, bool bypass_rlim);
