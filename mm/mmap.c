@@ -1882,22 +1882,27 @@ static int acct_stack_growth(struct vm_area_struct *vma,
 	if (size > rlimit(RLIMIT_STACK))
 		return -ENOMEM;
 
-	/* mlock limit tests */
-	if (mlock_future_check(mm, vma->vm_flags, grow << PAGE_SHIFT))
-		return -ENOMEM;
-
 	/* Check to ensure the stack will not grow into a hugetlb-only region */
 	new_start = (vma->vm_flags & VM_GROWSUP) ? vma->vm_start :
 			vma->vm_end - size;
 	if (is_hugepage_only_range(vma->vm_mm, new_start, size))
 		return -EFAULT;
 
+	/* mlock limit tests */
+	if (vma->vm_flags & VM_LOCKED)
+		if (__account_locked_vm(mm, grow << PAGE_SHIFT, current,
+						capable(CAP_IPC_LOCK)))
+			return -ENOMEM;
+
 	/*
 	 * Overcommit..  This must be the final test, as it will
 	 * update security statistics.
 	 */
-	if (security_vm_enough_memory_mm(mm, grow))
+	if (security_vm_enough_memory_mm(mm, grow)) {
+		if (vma->vm_flags & VM_LOCKED)
+			__unaccount_locked_vm(mm, grow << PAGE_SHIFT);
 		return -ENOMEM;
+	}
 
 	return 0;
 }
@@ -1975,8 +1980,6 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 				 * to guard against concurrent vma expansions.
 				 */
 				spin_lock(&mm->page_table_lock);
-				if (vma->vm_flags & VM_LOCKED)
-					mm->locked_vm += grow;
 				vm_stat_account(mm, vma->vm_flags, grow);
 				anon_vma_interval_tree_pre_update_vma(vma);
 				vma->vm_end = address;
@@ -2056,8 +2059,6 @@ int expand_downwards(struct vm_area_struct *vma, unsigned long address)
 				 * to guard against concurrent vma expansions.
 				 */
 				spin_lock(&mm->page_table_lock);
-				if (vma->vm_flags & VM_LOCKED)
-					mm->locked_vm += grow;
 				vm_stat_account(mm, vma->vm_flags, grow);
 				anon_vma_interval_tree_pre_update_vma(vma);
 				vma->vm_start = address;
@@ -2281,7 +2282,7 @@ static inline int munmap_sidetree(struct vm_area_struct *vma,
 		return -ENOMEM;
 
 	if (vma->vm_flags & VM_LOCKED)
-		vma->vm_mm->locked_vm -= vma_pages(vma);
+		__unaccount_locked_vm(vma->vm_mm, vma_pages(vma));
 
 	return 0;
 }
@@ -2525,6 +2526,7 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 	struct vm_area_struct *next, *prev, *merge;
 	pgoff_t pglen = len >> PAGE_SHIFT;
 	unsigned long charged = 0;
+	unsigned long locked = 0;
 	unsigned long end = addr + len;
 	unsigned long merge_start = addr, merge_end = end;
 	pgoff_t vm_pgoff;
@@ -2558,6 +2560,15 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 		if (security_vm_enough_memory_mm(mm, charged))
 			return -ENOMEM;
 		vm_flags |= VM_ACCOUNT;
+	}
+
+	if (vm_flags & VM_LOCKED) {
+		locked = len >> PAGE_SHIFT;
+		if (__account_locked_vm(mm, locked, current,
+						capable(CAP_IPC_LOCK))) {
+			error = -ENOMEM;
+			goto unacct_error;
+		}
 	}
 
 	next = mas_next(&mas, ULONG_MAX);
@@ -2605,7 +2616,7 @@ cannot_expand:
 	vma = vm_area_alloc(mm);
 	if (!vma) {
 		error = -ENOMEM;
-		goto unacct_error;
+		goto unlock_error;
 	}
 
 	vma->vm_start = addr;
@@ -2725,8 +2736,6 @@ expanded:
 					is_vm_hugetlb_page(vma) ||
 					vma == get_gate_vma(current->mm))
 			vma->vm_flags &= VM_LOCKED_CLEAR_MASK;
-		else
-			mm->locked_vm += (len >> PAGE_SHIFT);
 	}
 
 	if (file)
@@ -2759,6 +2768,9 @@ unmap_and_free_vma:
 		mapping_unmap_writable(file->f_mapping);
 free_vma:
 	vm_area_free(vma);
+unlock_error:
+	if (locked)
+		__unaccount_locked_vm(mm, locked);
 unacct_error:
 	if (charged)
 		vm_unacct_memory(charged);
@@ -2942,8 +2954,13 @@ static int do_brk_flags(struct ma_state *mas, struct vm_area_struct *vma,
 	if (mm->map_count > sysctl_max_map_count)
 		return -ENOMEM;
 
+	if (flags & VM_LOCKED)
+		if (__account_locked_vm(mm, len >> PAGE_SHIFT, current,
+					capable(CAP_IPC_LOCK)))
+			return -ENOMEM;
+
 	if (security_vm_enough_memory_mm(mm, len >> PAGE_SHIFT))
-		return -ENOMEM;
+		goto unacct_locked;
 
 	/*
 	 * Expand the existing vma if possible; Note that singular lists do not
@@ -2993,8 +3010,6 @@ out:
 	perf_event_mmap(vma);
 	mm->total_vm += len >> PAGE_SHIFT;
 	mm->data_vm += len >> PAGE_SHIFT;
-	if (flags & VM_LOCKED)
-		mm->locked_vm += (len >> PAGE_SHIFT);
 	vma->vm_flags |= VM_SOFTDIRTY;
 	validate_mm(mm);
 	return 0;
@@ -3003,6 +3018,8 @@ mas_store_fail:
 	vm_area_free(vma);
 vma_alloc_fail:
 	vm_unacct_memory(len >> PAGE_SHIFT);
+unacct_locked:
+	__unaccount_locked_vm(mm, len >> PAGE_SHIFT);
 	return -ENOMEM;
 }
 
@@ -3069,7 +3086,7 @@ void exit_mmap(struct mm_struct *mm)
 {
 	struct mmu_gather tlb;
 	struct vm_area_struct *vma;
-	unsigned long nr_accounted = 0;
+	unsigned long nr_accounted = 0, nr_locked = 0;
 	MA_STATE(mas, &mm->mm_mt, 0, 0);
 	int count = 0;
 
@@ -3112,6 +3129,8 @@ void exit_mmap(struct mm_struct *mm)
 	do {
 		if (vma->vm_flags & VM_ACCOUNT)
 			nr_accounted += vma_pages(vma);
+		if (vma->vm_flags & VM_LOCKED)
+			nr_locked += vma_pages(vma);
 		remove_vma(vma);
 		count++;
 		cond_resched();
@@ -3121,6 +3140,7 @@ void exit_mmap(struct mm_struct *mm)
 
 	trace_exit_mmap(mm);
 	__mt_destroy(&mm->mm_mt);
+	__unaccount_locked_vm(mm, nr_locked);
 	mmap_write_unlock(mm);
 	vm_unacct_memory(nr_accounted);
 }

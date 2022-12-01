@@ -416,6 +416,20 @@ static int mlock_fixup(struct vm_area_struct *vma, struct vm_area_struct **prev,
 		/* don't set VM_LOCKED or VM_LOCKONFAULT and don't count */
 		goto out;
 
+	/*
+	 * Keep track of amount of locked VM.
+	 */
+	nr_pages = (end - start) >> PAGE_SHIFT;
+	if (!(newflags & VM_LOCKED)) {
+		__unaccount_locked_vm(mm, nr_pages);
+	} else if (!(oldflags & VM_LOCKED)) {
+		if (__account_locked_vm(mm, nr_pages, current,
+						capable(CAP_IPC_LOCK))) {
+			ret = -ENOMEM;
+			goto out;
+		}
+	}
+
 	pgoff = vma->vm_pgoff + ((start - vma->vm_start) >> PAGE_SHIFT);
 	*prev = vma_merge(mm, *prev, start, end, newflags, vma->anon_vma,
 			  vma->vm_file, pgoff, vma_policy(vma),
@@ -438,16 +452,6 @@ static int mlock_fixup(struct vm_area_struct *vma, struct vm_area_struct **prev,
 	}
 
 success:
-	/*
-	 * Keep track of amount of locked VM.
-	 */
-	nr_pages = (end - start) >> PAGE_SHIFT;
-	if (!(newflags & VM_LOCKED))
-		nr_pages = -nr_pages;
-	else if (oldflags & VM_LOCKED)
-		nr_pages = 0;
-	mm->locked_vm += nr_pages;
-
 	/*
 	 * vm_flags is protected by the mmap_lock held in write mode.
 	 * It's okay if try_to_unmap_one unmaps a page just after we
