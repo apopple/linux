@@ -63,7 +63,7 @@ static long mm_iommu_do_alloc(struct mm_struct *mm, unsigned long ua,
 	unsigned long entry, chunk;
 
 	if (dev_hpa == MM_IOMMU_TABLE_INVALID_HPA) {
-		ret = account_locked_vm(mm, entries, true);
+		ret = account_locked_vm(mm, entries);
 		if (ret)
 			return ret;
 
@@ -178,7 +178,7 @@ free_exit:
 	kfree(mem);
 
 unlock_exit:
-	account_locked_vm(mm, locked_entries, false);
+	unaccount_locked_vm(mm, locked_entries);
 
 	return ret;
 }
@@ -279,7 +279,7 @@ long mm_iommu_put(struct mm_struct *mm, struct mm_iommu_table_group_mem_t *mem)
 unlock_exit:
 	mutex_unlock(&mem_list_mutex);
 
-	account_locked_vm(mm, unlock_entries, false);
+	unaccount_locked_vm(mm, unlock_entries);
 
 	return ret;
 }

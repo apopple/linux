@@ -290,7 +290,7 @@ static int tce_iommu_enable(struct tce_container *container)
 		return ret;
 
 	locked = table_group->tce32_size >> PAGE_SHIFT;
-	ret = account_locked_vm(container->mm, locked, true);
+	ret = account_locked_vm(container->mm, locked);
 	if (ret)
 		return ret;
 
@@ -309,7 +309,7 @@ static void tce_iommu_disable(struct tce_container *container)
 	container->enabled = false;
 
 	BUG_ON(!container->mm);
-	account_locked_vm(container->mm, container->locked_pages, false);
+	unaccount_locked_vm(container->mm, container->locked_pages);
 }
 
 static void *tce_iommu_open(unsigned long arg)
@@ -618,7 +618,7 @@ static long tce_iommu_create_table(struct tce_container *container,
 	if (!table_size)
 		return -EINVAL;
 
-	ret = account_locked_vm(container->mm, table_size >> PAGE_SHIFT, true);
+	ret = account_locked_vm(container->mm, table_size >> PAGE_SHIFT);
 	if (ret)
 		return ret;
 
@@ -637,7 +637,7 @@ static void tce_iommu_free_table(struct tce_container *container,
 	unsigned long pages = tbl->it_allocated_size >> PAGE_SHIFT;
 
 	iommu_tce_table_put(tbl);
-	account_locked_vm(container->mm, pages, false);
+	unaccount_locked_vm(container->mm, pages);
 }
 
 static long tce_iommu_create_window(struct tce_container *container,

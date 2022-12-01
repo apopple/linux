@@ -426,8 +426,11 @@ static int vfio_lock_acct(struct vfio_dma *dma, long npage, bool async)
 
 	ret = mmap_write_lock_killable(mm);
 	if (!ret) {
-		ret = __account_locked_vm(mm, abs(npage), npage > 0, dma->task,
-					  dma->lock_cap);
+		if (npage > 0)
+			ret = __account_locked_vm(mm, abs(npage), dma->task,
+						dma->lock_cap);
+		else
+			__unaccount_locked_vm(mm, abs(npage));
 		mmap_write_unlock(mm);
 	}
 

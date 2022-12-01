@@ -1970,9 +1970,11 @@ void unaccount_pinned_vm(struct mm_struct *mm, unsigned long npages);
 
 int account_locked_user_vm(struct user_struct *user, unsigned long npages);
 void unaccount_locked_user_vm(struct user_struct *user, unsigned long npages);
-int account_locked_vm(struct mm_struct *mm, unsigned long pages, bool inc);
-int __account_locked_vm(struct mm_struct *mm, unsigned long pages, bool inc,
+int account_locked_vm(struct mm_struct *mm, unsigned long pages);
+void unaccount_locked_vm(struct mm_struct *mm, unsigned long pages);
+int __account_locked_vm(struct mm_struct *mm, unsigned long pages,
 			struct task_struct *task, bool bypass_rlim);
+void __unaccount_locked_vm(struct mm_struct *mm, unsigned long pages);
 
 struct kvec;
 int get_kernel_pages(const struct kvec *iov, int nr_pages, int write,

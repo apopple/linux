@@ -38,7 +38,7 @@ static int afu_dma_pin_pages(struct dfl_feature_platform_data *pdata,
 	struct device *dev = &pdata->dev->dev;
 	int ret, pinned;
 
-	ret = account_locked_vm(current->mm, npages, true);
+	ret = account_locked_vm(current->mm, npages);
 	if (ret)
 		return ret;
 
@@ -67,7 +67,7 @@ unpin_pages:
 free_pages:
 	kfree(region->pages);
 unlock_vm:
-	account_locked_vm(current->mm, npages, false);
+	unaccount_locked_vm(current->mm, npages);
 	return ret;
 }
 
@@ -87,7 +87,7 @@ static void afu_dma_unpin_pages(struct dfl_feature_platform_data *pdata,
 
 	unpin_user_pages(region->pages, npages);
 	kfree(region->pages);
-	account_locked_vm(current->mm, npages, false);
+	unaccount_locked_vm(current->mm, npages);
 
 	dev_dbg(dev, "%ld pages unpinned\n", npages);
 }

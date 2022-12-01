@@ -481,7 +481,6 @@ EXPORT_SYMBOL_GPL(account_locked_user_vm);
  * __account_locked_vm - account locked pages to an mm's locked_vm
  * @mm:          mm to account against
  * @pages:       number of pages to account
- * @inc:         %true if @pages should be considered positive, %false if not
  * @task:        task used to check RLIMIT_MEMLOCK
  * @bypass_rlim: %true if checking RLIMIT_MEMLOCK should be skipped
  *
@@ -492,7 +491,7 @@ EXPORT_SYMBOL_GPL(account_locked_user_vm);
  * * 0       on success
  * * -ENOMEM if RLIMIT_MEMLOCK would be exceeded.
  */
-int __account_locked_vm(struct mm_struct *mm, unsigned long pages, bool inc,
+int __account_locked_vm(struct mm_struct *mm, unsigned long pages,
 			struct task_struct *task, bool bypass_rlim)
 {
 	unsigned long locked_vm, limit;
@@ -501,33 +500,44 @@ int __account_locked_vm(struct mm_struct *mm, unsigned long pages, bool inc,
 	mmap_assert_write_locked(mm);
 
 	locked_vm = mm->locked_vm;
-	if (inc) {
-		if (!bypass_rlim) {
-			limit = task_rlimit(task, RLIMIT_MEMLOCK) >> PAGE_SHIFT;
-			if (locked_vm + pages > limit)
-				ret = -ENOMEM;
-		}
-		if (!ret)
-			mm->locked_vm = locked_vm + pages;
-	} else {
-		WARN_ON_ONCE(pages > locked_vm);
-		mm->locked_vm = locked_vm - pages;
+	if (!bypass_rlim) {
+		limit = task_rlimit(task, RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+		if (locked_vm + pages > limit)
+			ret = -ENOMEM;
 	}
 
-	pr_debug("%s: [%d] caller %ps %c%lu %lu/%lu%s\n", __func__, task->pid,
-		 (void *)_RET_IP_, (inc) ? '+' : '-', pages << PAGE_SHIFT,
-		 locked_vm << PAGE_SHIFT, task_rlimit(task, RLIMIT_MEMLOCK),
-		 ret ? " - exceeded" : "");
+	if (!ret)
+		mm->locked_vm = locked_vm + pages;
+
+	pr_debug("%s: [%d] caller %ps %lu %lu/%lu%s\n", __func__, task->pid,
+		 (void *)_RET_IP_, pages << PAGE_SHIFT, locked_vm << PAGE_SHIFT,
+		task_rlimit(task, RLIMIT_MEMLOCK), ret ? " - exceeded" : "");
 
 	return ret;
 }
 EXPORT_SYMBOL_GPL(__account_locked_vm);
 
 /**
+ * __unaccount_locked_vm - unaccount locked pages to an mm's locked_vm
+ * @mm:          mm to account against
+ * @pages:       number of pages to account
+ *
+ * Assumes @mm are valid and that mmap_lock is held as writer.
+ */
+void __unaccount_locked_vm(struct mm_struct *mm, unsigned long pages)
+{
+	unsigned long locked_vm = mm->locked_vm;
+
+	mmap_assert_write_locked(mm);
+	WARN_ON_ONCE(pages > locked_vm);
+	mm->locked_vm = locked_vm - pages;
+}
+EXPORT_SYMBOL_GPL(__unaccount_locked_vm);
+
+/**
  * account_locked_vm - account locked pages to an mm's locked_vm
  * @mm:          mm to account against, may be NULL
  * @pages:       number of pages to account
- * @inc:         %true if @pages should be considered positive, %false if not
  *
  * Assumes a non-NULL @mm is valid (i.e. at least one reference on it).
  *
@@ -535,7 +545,7 @@ EXPORT_SYMBOL_GPL(__account_locked_vm);
  * * 0       on success, or if mm is NULL
  * * -ENOMEM if RLIMIT_MEMLOCK would be exceeded.
  */
-int account_locked_vm(struct mm_struct *mm, unsigned long pages, bool inc)
+int account_locked_vm(struct mm_struct *mm, unsigned long pages)
 {
 	int ret;
 
@@ -543,13 +553,34 @@ int account_locked_vm(struct mm_struct *mm, unsigned long pages, bool inc)
 		return 0;
 
 	mmap_write_lock(mm);
-	ret = __account_locked_vm(mm, pages, inc, current,
-				  capable(CAP_IPC_LOCK));
+	ret = __account_locked_vm(mm, pages, current, capable(CAP_IPC_LOCK));
 	mmap_write_unlock(mm);
 
 	return ret;
 }
 EXPORT_SYMBOL_GPL(account_locked_vm);
+
+/**
+ * unaccount_locked_vm - account locked pages to an mm's locked_vm
+ * @mm:          mm to account against, may be NULL
+ * @pages:       number of pages to account
+ *
+ * Assumes a non-NULL @mm is valid (i.e. at least one reference on it).
+ *
+ * Return:
+ * * 0       on success, or if mm is NULL
+ * * -ENOMEM if RLIMIT_MEMLOCK would be exceeded.
+ */
+void unaccount_locked_vm(struct mm_struct *mm, unsigned long pages)
+{
+	if (pages == 0 || !mm)
+		return;
+
+	mmap_write_lock(mm);
+	__unaccount_locked_vm(mm, pages);
+	mmap_write_unlock(mm);
+}
+EXPORT_SYMBOL_GPL(unaccount_locked_vm);
 
 unsigned long vm_mmap_pgoff(struct file *file, unsigned long addr,
 	unsigned long len, unsigned long prot,
