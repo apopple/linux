@@ -531,15 +531,21 @@ int __account_locked_vm(struct mm_struct *mm, unsigned long pages,
 			struct task_struct *task, bool bypass_rlim)
 {
 	unsigned long locked_vm, limit;
+	struct pins_cgroup *pins_cg = get_pins_cg(task);
 	int ret = 0;
 
 	mmap_assert_write_locked(mm);
 
+	if (pins_try_charge(pins_cg, pages))
+		return -ENOMEM;
+
 	locked_vm = mm->locked_vm;
 	if (!bypass_rlim) {
 		limit = task_rlimit(task, RLIMIT_MEMLOCK) >> PAGE_SHIFT;
-		if (locked_vm + pages > limit)
+		if (locked_vm + pages > limit) {
+			pins_uncharge(pins_cg, pages);
 			ret = -ENOMEM;
+		}
 	}
 
 	if (!ret)
@@ -549,6 +555,7 @@ int __account_locked_vm(struct mm_struct *mm, unsigned long pages,
 		 (void *)_RET_IP_, pages << PAGE_SHIFT, locked_vm << PAGE_SHIFT,
 		task_rlimit(task, RLIMIT_MEMLOCK), ret ? " - exceeded" : "");
 
+	put_pins_cg(pins_cg);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(__account_locked_vm);
@@ -564,9 +571,17 @@ void __unaccount_locked_vm(struct mm_struct *mm, unsigned long pages)
 {
 	unsigned long locked_vm = mm->locked_vm;
 
+	/*
+	 * TODO: Convert book3s vio to use pinned vm to ensure
+	 * unaccounting happens to the correct cgroup.
+	 */
+	struct pins_cgroup *pins_cg = get_pins_cg(current);
+
 	mmap_assert_write_locked(mm);
 	WARN_ON_ONCE(pages > locked_vm);
+	pins_uncharge(pins_cg, pages);
 	mm->locked_vm = locked_vm - pages;
+	put_pins_cg(pins_cg);
 }
 EXPORT_SYMBOL_GPL(__unaccount_locked_vm);
 
