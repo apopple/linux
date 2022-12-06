@@ -47,7 +47,7 @@ int __io_account_mem(struct user_struct *user, unsigned long nr_pages)
 	if (!nr_pages)
 		return 0;
 
-	if (account_locked_user_vm(user, nr_pages))
+	if (__account_locked_user_vm(user, nr_pages))
 		return -ENOMEM;
 
 	return 0;
@@ -56,7 +56,7 @@ int __io_account_mem(struct user_struct *user, unsigned long nr_pages)
 static void io_unaccount_mem(struct io_ring_ctx *ctx, unsigned long nr_pages)
 {
 	if (ctx->user)
-		unaccount_locked_user_vm(ctx->user, nr_pages);
+		__unaccount_locked_user_vm(ctx->user, nr_pages);
 
 	if (ctx->mm_account)
 		atomic64_sub(nr_pages, &ctx->mm_account->pinned_vm);

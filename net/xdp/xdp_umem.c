@@ -32,7 +32,7 @@ static void xdp_umem_unpin_pages(struct xdp_umem *umem)
 static void xdp_umem_unaccount_pages(struct xdp_umem *umem)
 {
 	if (umem->user) {
-		unaccount_locked_user_vm(umem->user, umem->npgs);
+		__unaccount_locked_user_vm(umem->user, umem->npgs);
 		free_uid(umem->user);
 	}
 }
@@ -131,7 +131,7 @@ static int xdp_umem_account_pages(struct xdp_umem *umem)
 		return 0;
 
 	umem->user = get_uid(current_user());
-	if (account_locked_user_vm(umem->user, umem->npgs)) {
+	if (__account_locked_user_vm(umem->user, umem->npgs)) {
 		free_uid(umem->user);
 		umem->user = NULL;
 		return -ENOBUFS;

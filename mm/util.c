@@ -490,13 +490,21 @@ void unaccount_pinned_vm(struct vm_account *vm_account, unsigned long npages)
 }
 EXPORT_SYMBOL_GPL(unaccount_pinned_vm);
 
-void unaccount_locked_user_vm(struct user_struct *user, unsigned long npages)
+void __unaccount_locked_user_vm(struct user_struct *user, unsigned long npages)
 {
 	atomic64_sub(npages, &user->locked_vm);
 }
+EXPORT_SYMBOL_GPL(__unaccount_locked_user_vm);
+
+void unaccount_locked_user_vm(struct user_struct *user,
+			struct pins_cgroup *pins_cg, unsigned long npages)
+{
+	__unaccount_locked_user_vm(user, npages);
+	pins_uncharge(pins_cg, npages);
+}
 EXPORT_SYMBOL_GPL(unaccount_locked_user_vm);
 
-int account_locked_user_vm(struct user_struct *user, unsigned long npages)
+int __account_locked_user_vm(struct user_struct *user, unsigned long npages)
 {
 	unsigned long lock_limit;
 	unsigned long new_pinned;
@@ -508,6 +516,34 @@ int account_locked_user_vm(struct user_struct *user, unsigned long npages)
 		atomic64_sub(npages, &user->locked_vm);
 		return -ENOMEM;
 	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(__account_locked_user_vm);
+
+/**
+ * account_locked_user_vm - account locked pages to a users locked_vm
+ * @user:    user to account to
+ * @pins_cg: cgroup to charge pins to
+ * @npages:  number of pages to account
+ *
+ * Accounts pages to user->locked_vm and enforces the tasks current
+ * rlimit against that. Also accounts to the tasks current cgroup if
+ * present.
+ */
+int account_locked_user_vm(struct user_struct *user,
+			struct pins_cgroup *pins_cg, unsigned long npages)
+{
+	if (pins_try_charge(pins_cg, npages))
+		return -ENOMEM;
+
+	if (__account_locked_user_vm(user, npages)) {
+		pins_uncharge(pins_cg, npages);
+		put_pins_cg(pins_cg);
+		return -ENOMEM;
+	}
+
+	put_pins_cg(pins_cg);
 
 	return 0;
 }

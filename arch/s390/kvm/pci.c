@@ -196,7 +196,7 @@ static inline void unaccount_mem(unsigned long nr_pages)
 	struct user_struct *user = get_uid(current_user());
 
 	if (user)
-		unaccount_locked_user_vm(user, nr_pages);
+		__unaccount_locked_user_vm(user, nr_pages);
 	if (current->mm)
 		__unaccount_pinned_vm(&current->mm, nr_pages);
 
@@ -207,7 +207,7 @@ static inline int account_mem(unsigned long nr_pages)
 	struct user_struct *user = get_uid(current_user());
 	unsigned long page_limit, cur_pages, new_pages;
 
-	if (account_locked_user_vm(user, nr_pages))
+	if (__account_locked_user_vm(user, nr_pages))
 		return -ENOMEM;
 
 	if (__account_pinned_vm(current->mm, nr_pages, true))
