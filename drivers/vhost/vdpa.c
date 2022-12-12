@@ -702,7 +702,7 @@ static void vhost_vdpa_pa_unmap(struct vhost_vdpa *v,
 				set_page_dirty_lock(page);
 			unpin_user_page(page);
 		}
-		unaccount_pinned_vm(dev->mm, PFN_DOWN(map->size));
+		unaccount_pinned_vm(&dev->vm_account, PFN_DOWN(map->size));
 		vhost_iotlb_map_free(iotlb, map);
 	}
 }
@@ -766,7 +766,7 @@ static int vhost_vdpa_map(struct vhost_vdpa *v, struct vhost_iotlb *iotlb,
 	int r = 0;
 
 	if (!vdpa->use_va)
-		if (account_pinned_vm(dev->mm, PFN_DOWN(size), false))
+		if (account_pinned_vm(&dev->vm_account, PFN_DOWN(size), false))
 			return -ENOMEM;
 
 	r = vhost_iotlb_add_range_ctx(iotlb, iova, iova + size - 1,

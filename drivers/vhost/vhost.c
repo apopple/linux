@@ -556,6 +556,7 @@ static void vhost_attach_mm(struct vhost_dev *dev)
 		dev->mm = current->mm;
 		mmgrab(dev->mm);
 	}
+	vm_account_init(&dev->vm_account, current);
 }
 
 static void vhost_detach_mm(struct vhost_dev *dev)
@@ -569,6 +570,7 @@ static void vhost_detach_mm(struct vhost_dev *dev)
 		mmdrop(dev->mm);
 
 	dev->mm = NULL;
+	vm_account_release(&dev->vm_account);
 }
 
 /* Caller should have device mutex */
