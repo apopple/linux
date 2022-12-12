@@ -31,7 +31,7 @@ static inline int io_notif_account_mem(struct io_kiocb *notif, unsigned len)
 	int ret;
 
 	if (ctx->user) {
-		ret = __io_account_mem(ctx->user, nr_pages);
+		ret = __io_account_mem(ctx->user, ctx->pins_cg, nr_pages);
 		if (ret)
 			return ret;
 		nd->account_pages += nr_pages;

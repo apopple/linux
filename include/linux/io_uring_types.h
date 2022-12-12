@@ -339,6 +339,7 @@ struct io_ring_ctx {
 	/* Only used for accounting purposes */
 	struct user_struct		*user;
 	struct mm_struct		*mm_account;
+	struct pins_cgroup              *pins_cg;
 
 	/* ctx exit and cancelation */
 	struct llist_head		fallback_llist;

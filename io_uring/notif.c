@@ -15,7 +15,8 @@ static void __io_notif_complete_tw(struct io_kiocb *notif, bool *locked)
 	struct io_ring_ctx *ctx = notif->ctx;
 
 	if (nd->account_pages && ctx->user) {
-		__unaccount_locked_user_vm(ctx->user, nd->account_pages);
+		unaccount_locked_user_vm(ctx->user, ctx->pins_cg,
+					 nd->account_pages);
 		nd->account_pages = 0;
 	}
 	io_req_task_complete(notif, locked);

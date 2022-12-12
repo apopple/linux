@@ -2634,6 +2634,7 @@ static __cold void io_ring_ctx_free(struct io_ring_ctx *ctx)
 
 	percpu_ref_exit(&ctx->refs);
 	free_uid(ctx->user);
+	put_pins_cg(ctx->pins_cg);
 	io_req_caches_free(ctx);
 	if (ctx->hash_map)
 		io_wq_put_hash(ctx->hash_map);
@@ -3457,6 +3458,7 @@ static __cold int io_uring_create(unsigned entries, struct io_uring_params *p,
 	ctx->compat = in_compat_syscall();
 	if (!capable(CAP_IPC_LOCK))
 		ctx->user = get_uid(current_user());
+	ctx->pins_cg = get_pins_cg(current);
 
 	/*
 	 * For SQPOLL, we just need a wakeup, always. For !SQPOLL, if
