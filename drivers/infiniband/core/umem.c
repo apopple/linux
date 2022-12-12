@@ -184,6 +184,7 @@ struct ib_umem *ib_umem_get(struct ib_device *device, unsigned long addr,
 	umem->writable   = ib_access_writable(access);
 	umem->owning_mm = mm = current->mm;
 	mmgrab(mm);
+	vm_account_init(&umem->vm_account, current);
 
 	page_list = (struct page **) __get_free_page(GFP_KERNEL);
 	if (!page_list) {
@@ -197,7 +198,7 @@ struct ib_umem *ib_umem_get(struct ib_device *device, unsigned long addr,
 		goto out;
 	}
 
-	if (__account_pinned_vm(mm, npages, false)) {
+	if (account_pinned_vm(&umem->vm_account, npages, false)) {
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -242,12 +243,13 @@ struct ib_umem *ib_umem_get(struct ib_device *device, unsigned long addr,
 
 umem_release:
 	__ib_umem_release(device, umem, 0);
-	__unaccount_pinned_vm(mm, ib_umem_num_pages(umem));
+	unaccount_pinned_vm(&umem->vm_account, ib_umem_num_pages(umem));
 out:
 	free_page((unsigned long) page_list);
 umem_kfree:
 	if (ret) {
 		mmdrop(umem->owning_mm);
+		vm_account_release(&umem->vm_account);
 		kfree(umem);
 	}
 	return ret ? ERR_PTR(ret) : umem;
@@ -269,8 +271,8 @@ void ib_umem_release(struct ib_umem *umem)
 
 	__ib_umem_release(umem->ibdev, umem, 1);
 
-	__unaccount_pinned_vm(umem->owning_mm, ib_umem_num_pages(umem));
-	mmdrop(umem->owning_mm);
+	unaccount_pinned_vm(&umem->vm_account, ib_umem_num_pages(umem));
+	vm_account_release(&umem->vm_account);
 	kfree(umem);
 }
 EXPORT_SYMBOL(ib_umem_release);

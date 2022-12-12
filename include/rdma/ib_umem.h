@@ -19,6 +19,7 @@ struct dma_buf_attach_ops;
 struct ib_umem {
 	struct ib_device       *ibdev;
 	struct mm_struct       *owning_mm;
+	struct vm_account vm_account;
 	u64 iova;
 	size_t			length;
 	unsigned long		address;

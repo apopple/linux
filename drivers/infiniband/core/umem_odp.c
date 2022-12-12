@@ -130,6 +130,7 @@ struct ib_umem_odp *ib_umem_odp_alloc_implicit(struct ib_device *device,
 	umem->ibdev = device;
 	umem->writable = ib_access_writable(access);
 	umem->owning_mm = current->mm;
+	vm_account_init(&umem->vm_account, current);
 	umem_odp->is_implicit_odp = 1;
 	umem_odp->page_shift = PAGE_SHIFT;
 
@@ -137,6 +138,7 @@ struct ib_umem_odp *ib_umem_odp_alloc_implicit(struct ib_device *device,
 	ret = ib_init_umem_odp(umem_odp, NULL);
 	if (ret) {
 		put_pid(umem_odp->tgid);
+		vm_account_release(&umem->vm_account);
 		kfree(umem_odp);
 		return ERR_PTR(ret);
 	}
@@ -179,6 +181,7 @@ ib_umem_odp_alloc_child(struct ib_umem_odp *root, unsigned long addr,
 	umem->address    = addr;
 	umem->writable   = root->umem.writable;
 	umem->owning_mm  = root->umem.owning_mm;
+	umem->vm_account = root->umem.vm_account;
 	odp_data->page_shift = PAGE_SHIFT;
 	odp_data->notifier.ops = ops;
 
@@ -239,6 +242,7 @@ struct ib_umem_odp *ib_umem_odp_get(struct ib_device *device,
 	umem_odp->umem.address = addr;
 	umem_odp->umem.writable = ib_access_writable(access);
 	umem_odp->umem.owning_mm = current->mm;
+	vm_account_init(&umem_odp->umem.vm_account, current);
 	umem_odp->notifier.ops = ops;
 
 	umem_odp->page_shift = PAGE_SHIFT;
@@ -255,6 +259,7 @@ struct ib_umem_odp *ib_umem_odp_get(struct ib_device *device,
 
 err_put_pid:
 	put_pid(umem_odp->tgid);
+	vm_account_release(&umem_odp->umem.vm_account);
 	kfree(umem_odp);
 	return ERR_PTR(ret);
 }
@@ -278,6 +283,7 @@ void ib_umem_odp_release(struct ib_umem_odp *umem_odp)
 		kvfree(umem_odp->pfn_list);
 	}
 	put_pid(umem_odp->tgid);
+	vm_account_release(&umem_odp->umem.vm_account);
 	kfree(umem_odp);
 }
 EXPORT_SYMBOL(ib_umem_odp_release);
