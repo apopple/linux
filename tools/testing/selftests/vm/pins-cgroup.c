@@ -16,6 +16,9 @@
 #include <sys/capability.h>
 #include <unistd.h>
 
+#include <mm/gup_test.h>
+
+#define GUP_TEST_FILE "/sys/kernel/debug/gup_test"
 #define CGROUP_TEMP "/sys/fs/cgroup/pins_XXXXXX"
 #define PINS_MAX (-1UL)
 
@@ -254,5 +257,38 @@ TEST_F(pins_cg, move_cg)
 	ASSERT_EQ(cgroup_pins(new_cg), 16);
 	ASSERT_EQ(cgroup_add_proc(self->cg_path, getpid()), 0);
 	rmdir(new_cg);
+}
+
+TEST_F(pins_cg, pup_longerm)
+{
+	struct gup_test gup = { 0 };
+	char *p;
+	int gup_fd;
+
+	ASSERT_EQ(cgroup_add_proc(self->cg_path, getpid()), 0);
+	p = mmap(NULL, 16*self->page_size, PROT_READ | PROT_WRITE,
+		MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	ASSERT_NE(p, MAP_FAILED);
+	memset(p, 0, 16*self->page_size);
+
+	gup.size = 16*self->page_size;
+	gup.nr_pages_per_call = 16;
+	gup.addr = (unsigned long) p;
+
+	ASSERT_GE(gup_fd = open(GUP_TEST_FILE, O_RDWR), 0);
+	ASSERT_EQ(ioctl(gup_fd, PIN_BASIC_TEST, &gup), 0);
+	ASSERT_EQ(gup.size, 16*self->page_size);
+
+	/* Set a limit and make sure it's respected */
+	ASSERT_EQ(cgroup_set_limit(self->cg_path, 8), 0);
+	ASSERT_EQ(ioctl(gup_fd, PIN_BASIC_TEST, &gup), 0);
+	ASSERT_EQ(gup.size, 0);
+
+	/* Set the rlimit and make sure it's respected */
+	ASSERT_EQ(cgroup_set_limit(self->cg_path, PINS_MAX), 0);
+	ASSERT_EQ(set_rlim_memlock(8*self->page_size), 0);
+	ASSERT_EQ(ioctl(gup_fd, PIN_BASIC_TEST, &gup), 0);
+	ASSERT_EQ(gup.size, 0);
+	ASSERT_EQ(cgroup_pins(self->cg_path), 0);
 }
 TEST_HARNESS_MAIN

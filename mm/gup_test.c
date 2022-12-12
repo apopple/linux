@@ -7,7 +7,8 @@
 #include "gup_test.h"
 
 static void put_back_pages(unsigned int cmd, struct page **pages,
-			   unsigned long nr_pages, unsigned int gup_test_flags)
+			   unsigned long nr_pages, unsigned int gup_test_flags,
+			   struct vm_account *vm_account)
 {
 	unsigned long i;
 
@@ -18,10 +19,13 @@ static void put_back_pages(unsigned int cmd, struct page **pages,
 			put_page(pages[i]);
 		break;
 
-	case PIN_FAST_BENCHMARK:
 	case PIN_BASIC_TEST:
+		unaccount_pinned_vm(vm_account, nr_pages);
+		fallthrough;
+	case PIN_FAST_BENCHMARK:
 	case PIN_LONGTERM_BENCHMARK:
 		unpin_user_pages(pages, nr_pages);
+		unaccount_pinned_vm(vm_account, nr_pages);
 		break;
 	case DUMP_USER_PAGES_TEST:
 		if (gup_test_flags & GUP_TEST_FLAG_DUMP_PAGES_USE_PIN) {
@@ -98,6 +102,7 @@ static void dump_pages_test(struct gup_test *gup, struct page **pages,
 static int __gup_test_ioctl(unsigned int cmd,
 		struct gup_test *gup)
 {
+	struct vm_account vm_account;
 	ktime_t start_time, end_time;
 	unsigned long i, nr_pages, addr, next;
 	long nr;
@@ -118,6 +123,8 @@ static int __gup_test_ioctl(unsigned int cmd,
 		ret = -EINTR;
 		goto free_pages;
 	}
+
+	vm_account_init(&vm_account, current);
 
 	i = 0;
 	nr = gup->nr_pages_per_call;
@@ -146,10 +153,18 @@ static int __gup_test_ioctl(unsigned int cmd,
 						 pages + i);
 			break;
 		case PIN_BASIC_TEST:
+			if (account_pinned_vm(&vm_account, nr, false)) {
+				nr = 0;
+				break;
+			}
 			nr = pin_user_pages(addr, nr, gup->gup_flags, pages + i,
 					    NULL);
 			break;
 		case PIN_LONGTERM_BENCHMARK:
+			if (account_pinned_vm(&vm_account, nr, false)) {
+				nr = 0;
+				break;
+			}
 			nr = pin_user_pages(addr, nr,
 					    gup->gup_flags | FOLL_LONGTERM,
 					    pages + i, NULL);
@@ -190,7 +205,7 @@ static int __gup_test_ioctl(unsigned int cmd,
 
 	start_time = ktime_get();
 
-	put_back_pages(cmd, pages, nr_pages, gup->test_flags);
+	put_back_pages(cmd, pages, nr_pages, gup->test_flags, &vm_account);
 
 	end_time = ktime_get();
 	gup->put_delta_usec = ktime_us_delta(end_time, start_time);
