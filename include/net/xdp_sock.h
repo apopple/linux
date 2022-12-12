@@ -26,6 +26,7 @@ struct xdp_umem {
 	u32 chunks;
 	u32 npgs;
 	struct user_struct *user;
+	struct pins_cgroup *pins_cg;
 	refcount_t users;
 	u8 flags;
 	bool zc;
