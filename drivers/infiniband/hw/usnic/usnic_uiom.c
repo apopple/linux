@@ -121,7 +121,8 @@ static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
 	uiomr->owning_mm = mm = current->mm;
 	mmap_read_lock(mm);
 
-	if (__account_pinned_vm(current->mm, npages, false)) {
+	vm_account_init(&uiomr->vm_account, current);
+	if (account_pinned_vm(&uiomr->vm_account, npages, false)) {
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -174,7 +175,8 @@ static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
 out:
 	if (ret < 0) {
 		usnic_uiom_put_pages(chunk_list, 0);
-		__unaccount_pinned_vm(current->mm, npages);
+		unaccount_pinned_vm(&uiomr->vm_account, npages);
+		vm_account_release(&uiomr->vm_account);
 	} else
 		mmgrab(uiomr->owning_mm);
 
@@ -426,7 +428,7 @@ void usnic_uiom_reg_release(struct usnic_uiom_reg *uiomr)
 {
 	__usnic_uiom_reg_release(uiomr->pd, uiomr, 1);
 
-	__unaccount_pinned_vm(uiomr->owning_mm, usnic_uiom_num_pages(uiomr));
+	unaccount_pinned_vm(&uiomr->vm_account, usnic_uiom_num_pages(uiomr));
 	__usnic_uiom_release_tail(uiomr);
 }
 

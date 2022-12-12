@@ -72,6 +72,7 @@ struct usnic_uiom_reg {
 	struct list_head		chunk_list;
 	struct work_struct		work;
 	struct mm_struct		*owning_mm;
+	struct vm_account               vm_account;
 };
 
 struct usnic_uiom_chunk {
