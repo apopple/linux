@@ -1255,8 +1255,14 @@ int mm_account_pinned_pages(struct mmpin *mmp, size_t size)
 	num_pg = (size >> PAGE_SHIFT) + 2;	/* worst case */
 	user = mmp->user ? : current_user();
 
-	if (__account_locked_user_vm(user, num_pg))
+	if (!mmp->pins_cg)
+		mmp->pins_cg = get_pins_cg(current);
+
+	if (account_locked_user_vm(user, mmp->pins_cg, num_pg)) {
+		put_pins_cg(mmp->pins_cg);
+		mmp->pins_cg = NULL;
 		return -ENOBUFS;
+	}
 
 	if (!mmp->user) {
 		mmp->user = get_uid(user);
@@ -1272,9 +1278,11 @@ EXPORT_SYMBOL_GPL(mm_account_pinned_pages);
 void mm_unaccount_pinned_pages(struct mmpin *mmp)
 {
 	if (mmp->user) {
-		__unaccount_locked_user_vm(mmp->user, mmp->num_pg);
+		unaccount_locked_user_vm(mmp->user, mmp->pins_cg, mmp->num_pg);
 		free_uid(mmp->user);
 	}
+
+	put_pins_cg(mmp->pins_cg);
 }
 EXPORT_SYMBOL_GPL(mm_unaccount_pinned_pages);
 
