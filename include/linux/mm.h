@@ -1973,8 +1973,6 @@ int account_pinned_vm(struct vm_account *vm_account, unsigned long npages,
 		bool bypass_rlim);
 void unaccount_pinned_vm(struct vm_account *vm_account, unsigned long npages);
 
-int __account_locked_user_vm(struct user_struct *user, unsigned long npages);
-void __unaccount_locked_user_vm(struct user_struct *user, unsigned long npages);
 int account_locked_user_vm(struct user_struct *user, struct pins_cgroup *pins_cg,
 			unsigned long npages);
 void unaccount_locked_user_vm(struct user_struct *user,

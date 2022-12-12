@@ -490,36 +490,13 @@ void unaccount_pinned_vm(struct vm_account *vm_account, unsigned long npages)
 }
 EXPORT_SYMBOL_GPL(unaccount_pinned_vm);
 
-void __unaccount_locked_user_vm(struct user_struct *user, unsigned long npages)
-{
-	atomic64_sub(npages, &user->locked_vm);
-}
-EXPORT_SYMBOL_GPL(__unaccount_locked_user_vm);
-
 void unaccount_locked_user_vm(struct user_struct *user,
 			struct pins_cgroup *pins_cg, unsigned long npages)
 {
-	__unaccount_locked_user_vm(user, npages);
+	atomic64_sub(npages, &user->locked_vm);
 	pins_uncharge(pins_cg, npages);
 }
 EXPORT_SYMBOL_GPL(unaccount_locked_user_vm);
-
-int __account_locked_user_vm(struct user_struct *user, unsigned long npages)
-{
-	unsigned long lock_limit;
-	unsigned long new_pinned;
-
-	lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
-
-	new_pinned = atomic64_add_return(npages, &user->locked_vm);
-	if (new_pinned > lock_limit && !capable(CAP_IPC_LOCK)) {
-		atomic64_sub(npages, &user->locked_vm);
-		return -ENOMEM;
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(__account_locked_user_vm);
 
 /**
  * account_locked_user_vm - account locked pages to a users locked_vm
@@ -534,10 +511,17 @@ EXPORT_SYMBOL_GPL(__account_locked_user_vm);
 int account_locked_user_vm(struct user_struct *user,
 			struct pins_cgroup *pins_cg, unsigned long npages)
 {
+	unsigned long lock_limit;
+	unsigned long new_pinned;
+
 	if (pins_try_charge(pins_cg, npages))
 		return -ENOMEM;
 
-	if (__account_locked_user_vm(user, npages)) {
+	lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+
+	new_pinned = atomic64_add_return(npages, &user->locked_vm);
+	if (new_pinned > lock_limit && !capable(CAP_IPC_LOCK)) {
+		atomic64_sub(npages, &user->locked_vm);
 		pins_uncharge(pins_cg, npages);
 		put_pins_cg(pins_cg);
 		return -ENOMEM;
