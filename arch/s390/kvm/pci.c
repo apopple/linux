@@ -194,20 +194,27 @@ static int kvm_zpci_clear_airq(struct zpci_dev *zdev)
 static inline void unaccount_mem(unsigned long nr_pages)
 {
 	struct user_struct *user = get_uid(current_user());
+	struct pins_cgroup *pins_cg = get_pins_cg(current);
 
 	if (user)
-		__unaccount_locked_user_vm(user, nr_pages);
+		unaccount_locked_user_vm(user, pins_cg, nr_pages);
 	if (current->mm)
 		__unaccount_pinned_vm(&current->mm, nr_pages);
 
+	put_pins_cg(pins_cg);
 }
 
 static inline int account_mem(unsigned long nr_pages)
 {
+	/* FIXME: The user_struct refcount is getting leaked */
 	struct user_struct *user = get_uid(current_user());
+	struct pins_cgroup *pins_cg = get_pins_cg(current);
 	unsigned long page_limit, cur_pages, new_pages;
+	int rc;
 
-	if (__account_locked_user_vm(user, nr_pages))
+	rc = account_locked_user_vm(user, pins_cg, nr_pages);
+	put_pins_cg(pins_cg);
+	if (rc)
 		return -ENOMEM;
 
 	if (__account_pinned_vm(current->mm, nr_pages, true))
