@@ -79,8 +79,9 @@ void siw_umem_release(struct siw_umem *umem, bool dirty)
 		kfree(umem->page_chunk[i].plist);
 		num_pages -= to_free;
 	}
-	__unaccount_pinned_vm(mm_s, umem->num_pages);
+	unaccount_pinned_vm(&umem->vm_account, umem->num_pages);
 
+	vm_account_release(&umem->vm_account);
 	mmdrop(mm_s);
 	kfree(umem->page_chunk);
 	kfree(umem);
@@ -389,13 +390,14 @@ struct siw_umem *siw_umem_get(u64 start, u64 len, bool writable)
 	umem->writable = writable;
 
 	mmgrab(mm_s);
+	vm_account_init(&umem->vm_account, current);
 
 	if (!writable)
 		foll_flags |= FOLL_FORCE;
 
 	mmap_read_lock(mm_s);
 
-	if (__account_pinned_vm(mm_s, num_pages, false)) {
+	if (account_pinned_vm(&umem->vm_account, num_pages, false)) {
 		rv = -ENOMEM;
 		goto out_sem_up;
 	}
@@ -435,7 +437,7 @@ struct siw_umem *siw_umem_get(u64 start, u64 len, bool writable)
 	}
 
 out_unaccount:
-	__unaccount_pinned_vm(mm_s, num_pages);
+	unaccount_pinned_vm(&umem->vm_account, num_pages);
 
 out_sem_up:
 	mmap_read_unlock(mm_s);

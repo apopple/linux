@@ -125,6 +125,7 @@ struct siw_umem {
 	bool writable;
 	u64 fp_addr; /* First page base address */
 	struct mm_struct *owning_mm;
+	struct vm_account vm_account;
 };
 
 struct siw_pble {
