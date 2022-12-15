@@ -100,6 +100,7 @@ struct vfio_dma {
 	struct task_struct	*task;
 	struct rb_root		pfn_list;	/* Ex-user pinned pfn list */
 	unsigned long		*bitmap;
+	struct vm_account       vm_account;
 };
 
 struct vfio_batch {
@@ -412,34 +413,6 @@ static int vfio_iova_put_vfio_pfn(struct vfio_dma *dma, struct vfio_pfn *vpfn)
 	return ret;
 }
 
-static int vfio_lock_acct(struct vfio_dma *dma, long npage, bool async)
-{
-	struct mm_struct *mm;
-	int ret;
-
-	if (!npage)
-		return 0;
-
-	mm = async ? get_task_mm(dma->task) : dma->task->mm;
-	if (!mm)
-		return -ESRCH; /* process exited */
-
-	ret = mmap_write_lock_killable(mm);
-	if (!ret) {
-		if (npage > 0)
-			ret = __account_locked_vm(mm, abs(npage), dma->task,
-						dma->lock_cap);
-		else
-			__unaccount_locked_vm(mm, abs(npage));
-		mmap_write_unlock(mm);
-	}
-
-	if (async)
-		mmput(mm);
-
-	return ret;
-}
-
 /*
  * Some mappings aren't backed by a struct page, for example an mmap'd
  * MMIO range for our own or another device.  These use a different
@@ -747,7 +720,7 @@ static long vfio_pin_pages_remote(struct vfio_dma *dma, unsigned long vaddr,
 	}
 
 out:
-	ret = vfio_lock_acct(dma, lock_acct, false);
+	ret = account_pinned_vm(&dma->vm_account, lock_acct, dma->lock_cap);
 
 unpin_out:
 	if (batch->size == 1 && !batch->offset) {
@@ -785,7 +758,7 @@ static long vfio_unpin_pages_remote(struct vfio_dma *dma, dma_addr_t iova,
 	}
 
 	if (do_accounting)
-		vfio_lock_acct(dma, locked - unlocked, true);
+		unaccount_pinned_vm(&dma->vm_account, locked - unlocked);
 
 	return unlocked;
 }
@@ -808,7 +781,7 @@ static int vfio_pin_page_external(struct vfio_dma *dma, unsigned long vaddr,
 	ret = 0;
 
 	if (do_accounting && !is_invalid_reserved_pfn(*pfn_base)) {
-		ret = vfio_lock_acct(dma, 1, true);
+		ret = account_pinned_vm(&dma->vm_account, 1, dma->lock_cap);
 		if (ret) {
 			put_pfn(*pfn_base, dma->prot);
 			if (ret == -ENOMEM)
@@ -836,7 +809,7 @@ static int vfio_unpin_page_external(struct vfio_dma *dma, dma_addr_t iova,
 	unlocked = vfio_iova_put_vfio_pfn(dma, vpfn);
 
 	if (do_accounting)
-		vfio_lock_acct(dma, -unlocked, true);
+		unaccount_pinned_vm(&dma->vm_account, unlocked);
 
 	return unlocked;
 }
@@ -924,7 +897,7 @@ again:
 		ret = vfio_add_to_pfn_list(dma, iova, phys_pfn);
 		if (ret) {
 			if (put_pfn(phys_pfn, dma->prot) && do_accounting)
-				vfio_lock_acct(dma, -1, true);
+				unaccount_pinned_vm(&dma->vm_account, 1);
 			goto pin_unwind;
 		}
 
@@ -1165,7 +1138,7 @@ static long vfio_unmap_unpin(struct vfio_iommu *iommu, struct vfio_dma *dma,
 	}
 
 	if (do_accounting) {
-		vfio_lock_acct(dma, -unlocked, true);
+		unaccount_pinned_vm(&dma->vm_account, unlocked);
 		return 0;
 	}
 	return unlocked;
@@ -1678,6 +1651,7 @@ static int vfio_dma_do_map(struct vfio_iommu *iommu,
 	get_task_struct(current->group_leader);
 	dma->task = current->group_leader;
 	dma->lock_cap = capable(CAP_IPC_LOCK);
+	vm_account_init(&dma->vm_account, current->group_leader);
 
 	dma->pfn_list = RB_ROOT;
 
@@ -2401,7 +2375,7 @@ static void vfio_iommu_unmap_unpin_reaccount(struct vfio_iommu *iommu)
 			if (!is_invalid_reserved_pfn(vpfn->pfn))
 				locked++;
 		}
-		vfio_lock_acct(dma, locked - unlocked, true);
+		unaccount_pinned_vm(&dma->vm_account, locked - unlocked);
 	}
 }
 
