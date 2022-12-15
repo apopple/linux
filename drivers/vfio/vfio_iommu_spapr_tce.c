@@ -66,6 +66,7 @@ struct tce_container {
 	bool def_window_pending;
 	unsigned long locked_pages;
 	struct mm_struct *mm;
+	struct vm_account vm_account;
 	struct iommu_table *tables[IOMMU_TABLE_GROUP_MAX_TABLES];
 	struct list_head group_list;
 	struct list_head prereg_list;
@@ -81,6 +82,7 @@ static long tce_iommu_mm_set(struct tce_container *container)
 	BUG_ON(!current->mm);
 	container->mm = current->mm;
 	mmgrab(container->mm);
+	vm_account_init(&container->vm_account, current);
 
 	return 0;
 }
@@ -290,7 +292,8 @@ static int tce_iommu_enable(struct tce_container *container)
 		return ret;
 
 	locked = table_group->tce32_size >> PAGE_SHIFT;
-	ret = account_locked_vm(container->mm, locked);
+	ret = account_pinned_vm(&container->vm_accounnt, locked,
+				capable(CAP_IPC_LOCK));
 	if (ret)
 		return ret;
 
@@ -309,7 +312,7 @@ static void tce_iommu_disable(struct tce_container *container)
 	container->enabled = false;
 
 	BUG_ON(!container->mm);
-	unaccount_locked_vm(container->mm, container->locked_pages);
+	unaccount_pinned_vm(&container->vm_account, container->locked_pages);
 }
 
 static void *tce_iommu_open(unsigned long arg)
@@ -371,8 +374,10 @@ static void tce_iommu_release(void *iommu_data)
 		WARN_ON(tce_iommu_prereg_free(container, tcemem));
 
 	tce_iommu_disable(container);
-	if (container->mm)
+	if (container->mm) {
 		mmdrop(container->mm);
+		vm_account_release(&container->vm_account);
+	}
 	mutex_destroy(&container->lock);
 
 	kfree(container);
@@ -618,7 +623,8 @@ static long tce_iommu_create_table(struct tce_container *container,
 	if (!table_size)
 		return -EINVAL;
 
-	ret = account_locked_vm(container->mm, table_size >> PAGE_SHIFT);
+	ret = account_pinned_vm(&container->vm_account,
+				table_size >> PAGE_SHIFT, capable(CAP_IPC_LOCK));
 	if (ret)
 		return ret;
 
@@ -637,7 +643,7 @@ static void tce_iommu_free_table(struct tce_container *container,
 	unsigned long pages = tbl->it_allocated_size >> PAGE_SHIFT;
 
 	iommu_tce_table_put(tbl);
-	unaccount_locked_vm(container->mm, pages);
+	unaccount_pinned_vm(&container->vm_account, pages);
 }
 
 static long tce_iommu_create_window(struct tce_container *container,

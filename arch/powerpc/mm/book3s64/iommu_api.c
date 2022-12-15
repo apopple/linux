@@ -30,6 +30,7 @@ struct mm_iommu_table_group_mem_t {
 	unsigned long used;
 	atomic64_t mapped;
 	unsigned int pageshift;
+	struct vm_account vm_account;
 	u64 ua;			/* userspace address */
 	u64 entries;		/* number of entries in hpas/hpages[] */
 	/*
@@ -62,18 +63,20 @@ static long mm_iommu_do_alloc(struct mm_struct *mm, unsigned long ua,
 	unsigned int pageshift;
 	unsigned long entry, chunk;
 
-	if (dev_hpa == MM_IOMMU_TABLE_INVALID_HPA) {
-		ret = account_locked_vm(mm, entries);
-		if (ret)
-			return ret;
-
-		locked_entries = entries;
-	}
-
 	mem = kzalloc(sizeof(*mem), GFP_KERNEL);
 	if (!mem) {
 		ret = -ENOMEM;
 		goto unlock_exit;
+	}
+
+	vm_account_init(&mem->vm_account, current);
+	if (dev_hpa == MM_IOMMU_TABLE_INVALID_HPA) {
+		ret = account_pinned_vm(&mem->vm_account, entries,
+					capable(CAP_IPC_LOCK));
+		if (ret)
+			return ret;
+
+		locked_entries = entries;
 	}
 
 	if (dev_hpa != MM_IOMMU_TABLE_INVALID_HPA) {
@@ -175,10 +178,10 @@ free_exit:
 	unpin_user_pages(mem->hpages, pinned);
 
 	vfree(mem->hpas);
-	kfree(mem);
 
 unlock_exit:
-	unaccount_locked_vm(mm, locked_entries);
+	unaccount_pinned_vm(&mem->vm_account, locked_entries);
+	kfree(mem);
 
 	return ret;
 }
@@ -229,6 +232,7 @@ static void mm_iommu_do_free(struct mm_iommu_table_group_mem_t *mem)
 
 	mm_iommu_unpin(mem);
 	vfree(mem->hpas);
+	vm_account_release(&mem->vm_account);
 	kfree(mem);
 }
 
@@ -279,7 +283,7 @@ long mm_iommu_put(struct mm_struct *mm, struct mm_iommu_table_group_mem_t *mem)
 unlock_exit:
 	mutex_unlock(&mem_list_mutex);
 
-	unaccount_locked_vm(mm, unlock_entries);
+	unaccount_pinned_vm(&mem->vm_account, unlock_entries);
 
 	return ret;
 }
