@@ -11,10 +11,8 @@
  * PFN_MAP - pfn has a dynamic page mapping established by a device driver
  */
 #define PFN_FLAGS_MASK (((u64) (~PAGE_MASK)) << (BITS_PER_LONG_LONG - PAGE_SHIFT))
-#define PFN_DEV (1ULL << (BITS_PER_LONG_LONG - 3))
 
-#define PFN_FLAGS_TRACE \
-	{ PFN_DEV,	"DEV" }
+#define PFN_FLAGS_TRACE { }
 
 static inline pfn_t __pfn_to_pfn_t(unsigned long pfn, u64 flags)
 {
